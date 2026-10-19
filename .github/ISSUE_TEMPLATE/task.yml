@@ -1,0 +1,26 @@
+name: Agent task
+description: Define a focused task for one ChatGPT/Codex session
+title: "Task: "
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected behavior
+      description: State the problem and the result to verify.
+    validations:
+      required: true
+  - type: input
+    id: session
+    attributes:
+      label: Owning session and task branch
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Files or areas owned
+      description: Coordinate overlapping accounting, importer and migration files.
+  - type: textarea
+    id: checks
+    attributes:
+      label: Validation and handoff

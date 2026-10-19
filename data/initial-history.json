@@ -1,0 +1,10 @@
+{
+  "version": "empty-install-v1",
+  "source": "Empty install; private records live in the hosted database",
+  "accounts": [],
+  "expected": {
+    "fills": 0,
+    "closed_account_trades": 0,
+    "gross_pnl": 0
+  }
+}

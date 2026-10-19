@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792103050477,
+      "tag": "0000_salty_doctor_octopus",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792103762394,
+      "tag": "0001_perfect_nebula",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792185152721,
+      "tag": "0002_curvy_ser_duncan",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792187316920,
+      "tag": "0003_certain_angel",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792438807936,
+      "tag": "0004_tranquil_goblin_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792439257164,
+      "tag": "0005_careless_captain_britain",
+      "breakpoints": true
+    }
+  ]
+}
