@@ -1,0 +1,56 @@
+.account-stage-groups{padding:0 20px 20px}
+.account-stage-group{min-width:0}
+.account-stage-group+.account-stage-group{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
+.account-stage-heading{border-left:3px solid var(--line);padding-left:11px;margin:0 0 14px}
+.account-stage-group.funded .account-stage-heading{border-left-color:var(--accent)}
+.account-stage-group.evaluation .account-stage-heading{border-left-color:var(--warning)}
+.account-stage-heading h3{display:flex;align-items:center;gap:9px;margin:0;font-size:14px;font-weight:650;color:var(--ink)}
+.account-stage-heading h3>span{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:6px;background:var(--surface-soft);font-size:11px;color:var(--text-secondary)}
+.account-stage-heading p{margin:5px 0 0;font-size:10px;line-height:1.6;color:var(--text-secondary)}
+.account-cards.account-cards-compact{grid-template-columns:minmax(0,1fr);gap:12px;padding:0;align-items:stretch}
+.account-cards-compact .account-card{display:flex;flex-direction:column;padding:14px;border-radius:9px}
+.account-cards-compact .account-card-header{display:block}
+.account-cards-compact .account-card-identity{gap:5px;min-width:0}
+.account-cards-compact .account-card-name{font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.account-cards-compact .account-id-copy{flex-shrink:0}
+.account-cards-compact .account-card-labels{gap:4px;margin-top:7px;align-items:center}
+.account-cards-compact .account-card-labels>span{font-size:8px;padding:3px 5px}
+.account-cards-compact .account-card-labels>.account-availability.connected{color:var(--accent-ink);border-color:var(--accent-border)}
+.account-cards-compact .account-card-labels>.account-availability.last-known,.account-cards-compact .account-card-labels>.account-availability.disconnected{color:var(--warning)}
+.account-cards-compact .account-headline-values{display:block;padding:14px 0 12px;min-width:0}
+.account-cards-compact .account-cash{padding:0}
+.account-cards-compact .account-cash>span{font-size:10px;margin-bottom:4px}
+.account-cards-compact .account-cash>strong{font-size:24px;line-height:1.25;letter-spacing:-.65px;font-variant-numeric:tabular-nums}
+.account-cards-compact .account-cash>small{font-size:9px;line-height:1.6;margin-top:5px}
+.account-cards-compact .account-reported-realized{margin-top:10px;padding:9px 0 0;border-top:1px solid var(--line);border-left:0}
+.account-cards-compact .account-reported-realized>span{font-size:9px}
+.account-cards-compact .account-reported-realized>strong{font-size:17px;margin-top:3px;font-variant-numeric:tabular-nums}
+.account-cards-compact .account-reported-realized>small{font-size:8px;line-height:1.6;margin-top:4px}
+.account-cards-compact .flex-progress{padding:11px;margin:0 0 12px;border-radius:6px}
+.account-cards-compact .flex-progress-title{gap:4px}
+.account-cards-compact .flex-progress-title>span{font-size:10px}
+.account-cards-compact .flex-progress-title>small{font-size:8px}
+.account-cards-compact .flex-progress-value{gap:6px;margin:10px 0}
+.account-cards-compact .flex-progress-value>strong{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px;font-size:22px;min-width:0;overflow-wrap:anywhere}
+.account-cards-compact .flex-progress-value strong>small{font-size:10px}
+.account-cards-compact .flex-progress-value>span{font-size:10px}
+.account-cards-compact .flex-day-steps{gap:4px}
+.account-cards-compact .flex-day-steps>span{height:5px}
+.account-cards-compact .flex-eval-facts{gap:4px;font-size:9px;margin-top:8px}
+.account-cards-compact .flex-today{font-size:9px;line-height:1.6;margin-top:8px}
+.account-cards-compact .flex-progress-notes{margin-top:9px;font-size:9px;color:var(--text-secondary)}
+.account-cards-compact .flex-progress-notes>summary{cursor:pointer;line-height:1.6}
+.account-cards-compact .flex-progress-notes>p{line-height:1.7;margin:7px 0 0}
+.account-cards-compact .account-open-positions{padding:10px;margin-bottom:10px;min-height:0}
+.account-cards-compact .account-details{margin-top:auto}
+.account-cards-compact .account-details>div{flex-wrap:wrap;gap:4px}
+.account-cards-compact .account-details b{overflow-wrap:anywhere;max-width:100%}
+.account-cards-compact .account-card-footer{padding-top:10px;gap:8px;flex-wrap:wrap;align-items:center}
+.account-cards-compact .account-card-footer>small{font-size:8px}
+.account-cards-compact .account-card-footer>div{gap:10px;margin-left:auto}
+.account-cards-compact .account-card-footer .text-button{font-size:9px}
+@media(min-width:720px){.account-cards.account-cards-compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:1100px){.account-cards.account-cards-compact{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(min-width:1280px){.account-cards.account-cards-compact{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(min-width:1440px){.account-cards.account-cards-compact{grid-template-columns:repeat(5,minmax(0,1fr))}}
+@media(max-width:650px){.account-stage-groups{padding:0 13px 15px}.account-stage-heading p{font-size:10px}.account-cards-compact .account-card{padding:16px}.account-cards-compact .account-card-name{font-size:13px}.account-cards-compact .account-card-labels>span{font-size:9px}.account-cards-compact .account-cash>strong{font-size:25px}}

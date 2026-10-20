@@ -5,6 +5,7 @@
 - Initial shared source prepared on 2026-10-19 from the owner's working Tradebook Site.
 - Five primary sections: Accounts, Calendar, Analysis, Payouts & costs, Settings.
 - Native balances and P&L remain prominent. Dated firm figures and execution-derived estimates remain separately labeled.
+- Accounts use compact, responsive cards with five per row at desktop widths of 1440px and above. Funded, evaluation and unclassified accounts have separate sections. Funded sorting uses known qualifying days remaining, not a claim of payout eligibility; unknown cycles follow known progress. Evaluations sort by consistency-adjusted profit remaining, with unconfirmed targets last. Archived labels remain excluded by default.
 - FIFO realized accounting includes partial exits, per-fill fees, session grouping and checkpoint uncertainty.
 - Immutable account observations support conservative balance-adjustment detection, payout overlap checks and owner classification.
 - Payout estimates use 90% for recognized Lucid Flex 50K funded accounts. Inference never writes confirmed cash received or fabricates an approval reset.
