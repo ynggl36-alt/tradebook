@@ -8,9 +8,11 @@ let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0;
 const importedPayloads:Record<string,unknown>[]=[];
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function(name: string, ...rest: any[]) {
+  if(name==='../../../lib/server-prices')return {loadPriceBars:async()=>[],savePriceBars:async()=>({confirmed:1})};
   if (name === 'next/headers') return { headers: async () => requestHeaders };
   if (name === 'next/navigation') return { redirect: (location: string) => { throw new Error('REDIRECT ' + location); } };
   if (name === '../../../lib/server-journal') return {
+    backupResponse:async()=>Response.json({format:'tradebook-backup-v1'}),
     importFirmPayouts: async()=>{firmPayoutWrites++;return {added:1,duplicates:0};},
     saveFirmReference: async()=>{firmWrites++;return {account:'LFE-TEST'};},
     loadAccountState: async()=>{accountReads++;return {monitor:null,accounts:[]};},
@@ -24,6 +26,14 @@ const originalLoad = (Module as any)._load;
 const auth = require('../app/chatgpt-auth') as typeof import('../app/chatgpt-auth');
 const route = require('../app/api/[...path]/route') as typeof import('../app/api/[...path]/route');
 (Module as any)._load = originalLoad;
+
+test('price history requires native sign-in for reads and same-origin authenticated uploads',async()=>{
+  const get=()=>new Request('https://journal.example/api/prices?contract=MES%202026-12&start=1&end=2');
+  const post=(origin='https://journal.example')=>new Request('https://journal.example/api/prices',{method:'POST',headers:{Origin:origin},body:JSON.stringify({bars:[]})});
+  requestHeaders=new Headers();assert.equal((await route.GET(get())).status,401);assert.equal((await route.POST(post())).status,401);
+  requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});
+  assert.equal((await route.POST(post('https://other.example'))).status,403);assert.equal((await route.POST(post())).status,200);assert.equal((await route.GET(get())).status,200);
+});
 
 test('authenticated email-only Sites requests open the private journal without a sign-in redirect', async () => {
   // Match the identity header shape in the failing hosted browser requests.
@@ -123,4 +133,13 @@ test('firm payout imports require native sign-in or owner-private service access
  requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});assert.equal((await route.POST(request('firm-payout-import','https://other.example'))).status,403);assert.equal(firmPayoutWrites,0);
  assert.equal((await route.POST(request())).status,200);assert.equal(firmPayoutWrites,1);
  requestHeaders=new Headers();assert.equal((await route.POST(request('maintenance','https://other.example'))).status,403);assert.equal(firmPayoutWrites,1);assert.equal((await route.POST(request('maintenance'))).status,200);assert.equal(firmPayoutWrites,2);
+});
+
+
+test('owner-private service backup is read-only and rejects cross-origin requests',async()=>{
+ requestHeaders=new Headers();
+ const request=(origin='https://journal.example')=>new Request('https://journal.example/api/maintenance',{method:'POST',headers:{Origin:origin},body:JSON.stringify({action:'backup'})});
+ assert.equal((await route.POST(request('https://other.example'))).status,403);
+ assert.equal((await route.POST(request())).status,200);
+ assert.equal((await route.GET(new Request('https://journal.example/api/backup'))).status,401);
 });

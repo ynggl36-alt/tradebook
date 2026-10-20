@@ -21,6 +21,7 @@ const syntheticSeed=JSON.parse(fs.readFileSync('tests/fixtures/synthetic-history
 const originalLoad=(Module as any)._load;
 (Module as any)._load=function(name:string,...rest:any[]){if(name.endsWith('/data/initial-history.json'))return syntheticSeed;if(name==='cloudflare:workers')return {env:{DB:database}};return originalLoad.call(this,name,...rest);};
 const server=require('../lib/server-journal')as typeof import('../lib/server-journal');
+const prices=require('../lib/server-prices')as typeof import('../lib/server-prices');
 
 test('journal revision checks observe changes and partial-exit reports preserve original completed trades',async()=>{
  let offset=0,ready=false;while(!ready){const result=await server.bootstrap(offset);offset=result.next;ready=result.ready;}
@@ -273,4 +274,29 @@ test('a journal read keeps its pre-boundary version when the clock crosses a fut
   Date.now=()=>boundary+60001;try{await server.loadJournal();}finally{Date.now=original;sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);sqlite.prepare('DELETE FROM execution_times WHERE account=?').run(account);sqlite.prepare("DELETE FROM journal_meta WHERE key='next_future_fill'").run();}
  }
  assert.equal(Date.now,original);
+});
+
+
+test('durable price batches deduplicate, reject atomic conflicts and preserve all journal records',async()=>{
+ const before=await server.loadJournal(),version=await server.loadJournalVersion();
+ const start=Date.parse('2026-10-01T14:00:00Z');
+ const bars=Array.from({length:240},(_,i)=>({id:'MES 2026-12|'+(start+i*60000),contract:'MES 2026-12',start:start+i*60000,end:start+(i+1)*60000,open:6000,high:6002,low:5999,close:6001,volume:23,capturedAt:start+241*60000}));
+ assert.equal((await prices.savePriceBars(bars)).confirmed,240);
+ await prices.savePriceBars(bars);assert.equal((await prices.loadPriceBars('MES 2026-12',start,start+240*60000)).length,240);
+ await prices.savePriceBars([{...bars[0],capturedAt:bars[0].capturedAt+120000}]);
+ await prices.savePriceBars([{...bars[0],close:6002,capturedAt:bars[0].capturedAt+60000}]);assert.equal((await prices.loadPriceBars('MES 2026-12',start,start))[0].close,6001);
+ const revised={...bars[0],close:6002,capturedAt:bars[0].capturedAt+180000};await prices.savePriceBars([revised]);
+ await prices.savePriceBars([bars[0]]);assert.equal((await prices.loadPriceBars('MES 2026-12',start,start))[0].close,6002);
+ const fresh={...bars[0],id:'NQ 2026-12|'+start,contract:'NQ 2026-12'};
+ await assert.rejects(()=>prices.savePriceBars([fresh,...bars.slice(1,11),{...revised,close:6000}]),/Conflicting/);
+ assert.equal((await prices.loadPriceBars('NQ 2026-12',start,start)).length,0);
+ assert.equal((await prices.loadPriceBars('MES 2026-12',start,start))[0].close,6002);
+ await assert.rejects(()=>prices.savePriceBars([{...bars[0],volume:-5}]));
+ const exported=JSON.parse(await(await server.backupResponse()).text());assert.equal(exported.priceBars.length,240);assert.equal(exported.priceBars[0].contract,'MES 2026-12');
+ // Cross two archive pages and a contract boundary without OFFSET rescans.
+ await prices.savePriceBars(bars.map(b=>({...b,contract:'NQ 2026-12',id:'NQ 2026-12|'+b.start})));
+ await prices.savePriceBars(bars.slice(0,21).map(b=>({...b,contract:'ES 2026-12',id:'ES 2026-12|'+b.start})));
+ const paged=JSON.parse(await(await server.backupResponse()).text());assert.equal(paged.priceBars.length,501);assert.equal(new Set(paged.priceBars.map((b:any)=>b.id)).size,501);
+ const after=await server.loadJournal();assert.deepEqual(after,before);assert.deepEqual(await server.loadJournalVersion(),version);
+ sqlite.exec('DELETE FROM price_bars');
 });

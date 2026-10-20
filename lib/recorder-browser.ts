@@ -4,6 +4,7 @@ import {buildSimulatorHistory} from './simulator';
 import type {SimulatorSnapshot} from './simulator';
 import {accountExecutionKey,executionFingerprint,pendingAccountFills} from './recorder-sync';
 import type {AccountFill,AccountSnapshot,SyncReceipt,SyncResult} from './recorder-sync';
+import {PRICE_BATCH_SIZE,priceFingerprint,priceValuesFingerprint} from './price-history';
 
 export type RecorderDirectory = {
   kind: 'directory'; name: string;
@@ -40,7 +41,7 @@ export function parseRecorderXml(xml: string, filename?: string): RecorderCaptur
 let opening:Promise<IDBDatabase>|undefined;
 function database() {
   if (!opening) opening=new Promise<IDBDatabase>((resolve,reject)=>{
-    const request=indexedDB.open('tradebook-recorder-local',3);
+    const request=indexedDB.open('tradebook-recorder-local',4);
     request.onupgradeneeded=()=>{
       const db=request.result;
       if(!db.objectStoreNames.contains('settings'))db.createObjectStore('settings');
@@ -49,6 +50,7 @@ function database() {
       if(!db.objectStoreNames.contains('simulation'))db.createObjectStore('simulation',{keyPath:'name'});
       if(!db.objectStoreNames.contains('accountCaptures'))db.createObjectStore('accountCaptures',{keyPath:'name'});
       if(!db.objectStoreNames.contains('syncReceipts'))db.createObjectStore('syncReceipts',{keyPath:'key'});
+      if(!db.objectStoreNames.contains('priceUploads')){const queue=db.createObjectStore('priceUploads',{keyPath:'id'});queue.createIndex('time','start');}
     };
     request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();opening=undefined;};resolve(request.result);};
     request.onerror=()=>{opening=undefined;reject(request.error || new Error('Local storage could not open.'));};
@@ -107,15 +109,61 @@ export async function acknowledgeAccountFills(fills:AccountFill[],result:SyncRes
 export async function cacheCapture(file: Pick<File,'name'|'size'|'lastModified'>, capture:RecorderCapture) {
   const db=await database();const info:RecorderFileInfo={name:file.name,size:file.size,lastModified:file.lastModified,day:capture.day,savedAt:capture.savedAt,version:capture.version,contracts:capture.contracts,barCount:capture.bars.length,simulatorFills:capture.simulatorFills,warnings:capture.warnings,simulationVersion:1,captureVersion:2,mode:capture.mode,accountFills:capture.accountFills.length};
   await new Promise<void>((resolve,reject)=>{
-    const tx=db.transaction(['bars','files','simulation','accountCaptures'],'readwrite'), bars=tx.objectStore('bars');
-    for (const bar of capture.bars) {
-      const old=bars.get(bar.id);
-      old.onsuccess=()=>{if(newestPriceBar(old.result,bar)===bar)bars.put(bar);};
+    const tx=db.transaction(['bars','files','simulation','accountCaptures','priceUploads'],'readwrite'), bars=tx.objectStore('bars');
+    for (const incoming of capture.bars) {
+      let bar=incoming;
+      const old=bars.get(incoming.id);
+      old.onsuccess=()=>{if(!incoming.observed&&old.result&&priceValuesFingerprint(old.result)===priceValuesFingerprint(incoming))bar={...incoming,capturedAt:old.result.capturedAt};if(newestPriceBar(old.result,bar)===bar){bars.put(bar);if(bar.start>=Date.UTC(2026,0,1)&&(!old.result||priceFingerprint(old.result)!==priceFingerprint(bar)))tx.objectStore('priceUploads').put(bar);}};
     }
     const previous=tx.objectStore('files').get(file.name);
     previous.onsuccess=()=>{tx.objectStore('files').put(!previous.result||previous.result.savedAt<=info.savedAt?info:{...previous.result,lastModified:info.lastModified,size:info.size,simulationVersion:1,captureVersion:2});};
     const store=tx.objectStore(capture.mode==='Sim101Only'?'simulation':'accountCaptures'),old=store.get(file.name);
     old.onsuccess=()=>{if(!old.result||old.result.savedAt<=capture.savedAt)store.put({name:file.name,savedAt:capture.savedAt,fills:capture.mode==='Sim101Only'?capture.simulation:capture.accountFills});};
+    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+}
+
+// Upgrade existing device-only candles gradually. Cursor progress and queued bars
+// commit together; closing the tab cannot skip a portion of the old cache.
+export async function seedPriceUploads(){
+  const db=await database();
+  await new Promise<void>((resolve,reject)=>{
+    const tx=db.transaction(['bars','priceUploads','settings'],'readwrite'),settings=tx.objectStore('settings');
+    const progress=settings.get('priceQueueCursor');
+    progress.onsuccess=()=>{
+      if(progress.result===true)return;
+      const range=typeof progress.result==='string'?IDBKeyRange.lowerBound(progress.result,true):undefined;
+      const request=tx.objectStore('bars').openCursor(range);let count=0;
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor){settings.put(true,'priceQueueCursor');return;}
+        const bar=cursor.value as PriceBar;
+        if(bar.start>=Date.UTC(2026,0,1)){const pending=tx.objectStore('priceUploads').get(bar.id);pending.onsuccess=()=>{if(!pending.result||pending.result.capturedAt<=bar.capturedAt)tx.objectStore('priceUploads').put(bar);};}
+        settings.put(cursor.key,'priceQueueCursor');if(++count<1000)cursor.continue();
+      };
+    };
+    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+}
+export type PriceUploadState={pending:number;at:number};
+export async function readPriceUploadState():Promise<PriceUploadState>{
+  const db=await database();return new Promise((resolve,reject)=>{
+    const tx=db.transaction(['priceUploads','settings']);let pending=0,at=0;
+    const count=tx.objectStore('priceUploads').count();count.onsuccess=()=>{pending=count.result;};
+    const last=tx.objectStore('settings').get('lastPriceUpload');last.onsuccess=()=>{at=last.result||0;};
+    tx.oncomplete=()=>resolve({pending,at});tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+}
+export async function nextPriceUpload():Promise<PriceBar[]>{
+  const db=await database();return new Promise((resolve,reject)=>{
+    const tx=db.transaction('priceUploads'),request=tx.objectStore('priceUploads').index('time').openCursor(null,'prev'),bars:PriceBar[]=[];
+    request.onsuccess=()=>{const cursor=request.result;if(cursor){bars.push(cursor.value);if(bars.length<PRICE_BATCH_SIZE)cursor.continue();}};
+    tx.oncomplete=()=>resolve(bars);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+}
+export async function acknowledgePriceUpload(bars:PriceBar[]){
+  const db=await database();await new Promise<void>((resolve,reject)=>{
+    const tx=db.transaction(['priceUploads','settings'],'readwrite'),queue=tx.objectStore('priceUploads');
+    for(const bar of bars){const current=queue.get(bar.id);current.onsuccess=()=>{if(current.result&&priceFingerprint(current.result)===priceFingerprint(bar))queue.delete(bar.id);};}
+    tx.objectStore('settings').put(Date.now(),'lastPriceUpload');
     tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
   });
 }

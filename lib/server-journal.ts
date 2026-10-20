@@ -278,6 +278,13 @@ export async function backupResponse(){
         if(rows.results.length<500)break;
       }
     }
+    yield '],"priceBars":[';
+    let contract='',start=-1,wrote=false;
+    for(;;){
+      const rows=await db().prepare("SELECT contract,start,json_object('id',contract||'|'||start,'contract',contract,'start',start,'end',start+60000,'open',open,'high',high,'low',low,'close',close,'volume',volume,'capturedAt',captured_at,'receivedAt',received_at) AS data FROM price_bars WHERE (contract,start)>(?,?) ORDER BY contract,start LIMIT 500").bind(contract,start).all<{contract:string;start:number;data:string}>();
+      if(rows.results.length){yield (wrote?',':'')+rows.results.map(row=>row.data).join(',');wrote=true;const last=rows.results.at(-1)!;contract=last.contract;start=last.start;}
+      if(rows.results.length<500)break;
+    }
     yield ']}';
   }
   const iterator=chunks(),stream=new ReadableStream<Uint8Array>({async pull(controller){try{const next=await iterator.next();if(typeof next.value==='string')controller.enqueue(encoder.encode(next.value));else controller.close();}catch(error){controller.error(error);}},async cancel(){await iterator.return(undefined);}});

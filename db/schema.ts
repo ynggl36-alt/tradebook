@@ -19,3 +19,8 @@ export const recorderCaptures=sqliteTable('recorder_captures',{capturedAt:text('
 export const accountObservations=sqliteTable('account_observations',{id:text('id').primaryKey(),account:text('account').notNull(),capturedAt:text('captured_at').notNull(),origin:text('origin').notNull(),cashValue:real('cash_value'),data:text('data').notNull(),receivedAt:text('received_at').notNull()},table=>[index('account_observations_account_time').on(table.account,table.capturedAt)]);
 export const balanceAdjustmentLabels=sqliteTable('balance_adjustment_labels',{id:text('id').primaryKey(),data:text('data').notNull()});
 export const executionTimes=sqliteTable('execution_times',{account:text('account').notNull(),time:text('time').notNull()},table=>[primaryKey({columns:[table.account,table.time]})]);
+export const priceBars=sqliteTable('price_bars',{
+  contract:text('contract').notNull(),start:integer('start').notNull(),
+  open:real('open').notNull(),high:real('high').notNull(),low:real('low').notNull(),close:real('close').notNull(),
+  volume:integer('volume').notNull(),capturedAt:integer('captured_at').notNull(),receivedAt:integer('received_at').notNull(),
+},table=>[primaryKey({columns:[table.contract,table.start]})]);

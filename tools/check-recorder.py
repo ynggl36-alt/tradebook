@@ -44,5 +44,10 @@ assert 'RecoverAccount(account, true)' in method('StopAndSave')
 assert 'Account.AccountStatusUpdate -= OnAccountStatus' in method('StopAndSave')
 assert 'SaveDays(true)' in method('WriteLoop') and 'if (exportCsv) SaveCsv()' in method('Save')
 assert 'if (recordPrices)' in method('Start') and 'now.Date.AddDays(-historyDays)' in method('RequestPrices')
+assert 'TimeSpan.FromMinutes(5)' in method('HistoryIdle') and 'account.Positions.Any' in method('HistoryIdle')
+assert '.Update +=' not in method('RequestHistoryDay') and '1600' in method('CompleteHistoryDay')
+assert 'Task.Run(' in method('RequestHistoryDay') and 'CaptureClosedBars' not in method('RequestHistoryDay')
+assert 'daysBack < 35' in method('AdvanceHistory') and 'historyTargets' in method('AdvanceHistory')
+assert 'SaveHistoryProgress' not in method('ProcessExecution'), 'Fill processing must not write the price ledger per fill'
 assert 'new XAttribute("schemaVersion", "1")' in source.decode(),'Capture format must remain compatible'
 print(json.dumps({'csharpSyntax':'passed','passiveApi':'passed','callbackBoundaries':'passed','stopDrain':'passed','legacyFormat':'schema 1','nativeNinjaTraderCompile':'not available in this environment'}))

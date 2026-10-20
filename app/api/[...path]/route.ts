@@ -7,6 +7,7 @@ import {netTradeSummary} from '../../../lib/trading-costs';
 import {accountStage,flexAccount,flexEvaluation,flexPayoutDays} from '../../../lib/lucid-flex';
 import {payoutSummary,payoutIncomeSummary} from '../../../lib/payouts';
 import {summarizeRealized} from '../../../lib/realized';
+import {loadPriceBars,savePriceBars} from '../../../lib/server-prices';
 
 export const dynamic='force-dynamic';
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
@@ -19,6 +20,7 @@ async function handle(request:Request){
     // using the same validation and deduplication as dashboard uploads.
     if(path==='maintenance'&&method==='POST'){
       const body=await request.json()as {action:string;offset?:number;payload?:Record<string,unknown>;day?:string;account?:string;payouts?:boolean;recent?:boolean};
+      if(body.action==='backup')return backupResponse();
       if(body.action==='bootstrap')return json(await bootstrap(body.offset??0));
       if(body.action==='firm-reference')return json(await saveFirmReference(body.payload??{}));
       if(body.action==='import')return json(await importExecutions(body.payload??{}));
@@ -37,6 +39,11 @@ async function handle(request:Request){
       return json({error:'Unknown maintenance operation.'},400);
     }
     if(!await getChatGPTUser())return json({error:'Sign in with ChatGPT to open your private journal.'},401);
+    if(path==='prices'&&method==='GET')return json({bars:await loadPriceBars(url.searchParams.get('contract')||'',Number(url.searchParams.get('start')),Number(url.searchParams.get('end')))});
+    if(path==='prices'&&method==='POST'){
+      const raw=await request.text();if(raw.length>100000)return json({error:'Price batches must be under 100 KB.'},413);
+      return json(await savePriceBars((JSON.parse(raw) as {bars:unknown}).bars));
+    }
     if(path==='account-state'&&method==='GET')return json(await loadAccountState());
     if(path==='journal'&&method==='GET')return json(await loadJournal());
     if(path==='journal-version'&&method==='GET')return json(await loadJournalVersion());
