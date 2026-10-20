@@ -1,6 +1,7 @@
 import {env} from 'cloudflare:workers';
 import {validatePriceBars,validatePriceRange} from './price-history';
 import type {PriceBar} from './recorder';
+import {weeklyBoundaryStarts} from './weekly-gaps';
 
 const database=()=>{if(!env.DB)throw new Error('Price storage is unavailable.');return env.DB;};
 export async function savePriceBars(input:unknown){
@@ -22,5 +23,13 @@ export async function savePriceBars(input:unknown){
 export async function loadPriceBars(contract:string,start:number,end:number){
   validatePriceRange(contract,start,end);
   const rows=await database().prepare('SELECT contract,start,open,high,low,close,volume,captured_at AS capturedAt FROM price_bars WHERE contract=? AND start>=? AND start<=? ORDER BY start').bind(contract,start,end).all<Omit<PriceBar,'id'|'end'>>();
+  return rows.results.map(b=>({...b,id:b.contract+'|'+b.start,end:b.start+60000}));
+}
+export async function loadWeeklyGapBars(contract:string,asOf:number){
+  validatePriceRange(contract,asOf,asOf);
+  if(asOf<Date.UTC(2026,0,1)||asOf>Date.now()+300000)throw new Error('Choose a recorded trade from 2026 onward.');
+  const times=weeklyBoundaryStarts(asOf);if(!times.length)return [];
+  // Only the boundary minutes, rather than repeatedly reading 35 days of bars.
+  const rows=await database().prepare(`SELECT contract,start,open,high,low,close,volume,captured_at AS capturedAt FROM price_bars WHERE contract=? AND start IN (${times.map(()=>'?').join(',')}) ORDER BY start`).bind(contract,...times).all<Omit<PriceBar,'id'|'end'>>();
   return rows.results.map(b=>({...b,id:b.contract+'|'+b.start,end:b.start+60000}));
 }

@@ -8,7 +8,7 @@ let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0;
 const importedPayloads:Record<string,unknown>[]=[];
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function(name: string, ...rest: any[]) {
-  if(name==='../../../lib/server-prices')return {loadPriceBars:async()=>[],savePriceBars:async()=>({confirmed:1})};
+  if(name==='../../../lib/server-prices')return {loadPriceBars:async()=>[],loadWeeklyGapBars:async()=>[],savePriceBars:async()=>({confirmed:1})};
   if (name === 'next/headers') return { headers: async () => requestHeaders };
   if (name === 'next/navigation') return { redirect: (location: string) => { throw new Error('REDIRECT ' + location); } };
   if (name === '../../../lib/server-journal') return {
@@ -142,4 +142,11 @@ test('owner-private service backup is read-only and rejects cross-origin request
  assert.equal((await route.POST(request('https://other.example'))).status,403);
  assert.equal((await route.POST(request())).status,200);
  assert.equal((await route.GET(new Request('https://journal.example/api/backup'))).status,401);
+});
+
+
+test('weekly-gap boundary reads require native journal sign-in',async()=>{
+ const request=new Request('https://journal.example/api/weekly-gap-bars?contract=NQ%202026-12&asOf=1792500000000');
+ requestHeaders=new Headers();assert.equal((await route.GET(request)).status,401);
+ requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});assert.equal((await route.GET(request)).status,200);
 });

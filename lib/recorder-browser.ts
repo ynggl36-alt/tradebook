@@ -5,6 +5,7 @@ import type {SimulatorSnapshot} from './simulator';
 import {accountExecutionKey,executionFingerprint,pendingAccountFills} from './recorder-sync';
 import type {AccountFill,AccountSnapshot,SyncReceipt,SyncResult} from './recorder-sync';
 import {PRICE_BATCH_SIZE,priceFingerprint,priceValuesFingerprint} from './price-history';
+import {weeklyBoundaryStarts} from './weekly-gaps';
 
 export type RecorderDirectory = {
   kind: 'directory'; name: string;
@@ -87,6 +88,9 @@ export async function readPriceBars(contract:string,start:number,end:number):Pro
     const request=db.transaction('bars').objectStore('bars').index('contractTime').getAll(range);
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
+}
+export async function readWeeklyGapBars(contract:string,asOf:number){
+  return (await Promise.all(weeklyBoundaryStarts(asOf).map(start=>readPriceBars(contract,start,start)))).flat();
 }
 export async function readSimulatorHistory(){
   const db=await database();
