@@ -1,7 +1,7 @@
 'use client';
 import React,{createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import {Activity,ArrowRight,CheckCircle2,ExternalLink,FolderOpen,LoaderCircle,RefreshCw,Unplug,Upload} from 'lucide-react';
-import {acknowledgeAccountFills,forgetDirectory,needsCaptureRead,readAccountSyncState,readCaptureFile,readRecorderSummary,readSimulatorHistory,rememberDirectory,rememberExecutionSync,restoreDirectory,restoreExecutionSync} from '../lib/recorder-browser';
+import {acknowledgeAccountFills,acknowledgePriceUpload,forgetDirectory,needsCaptureRead,nextPriceUpload,readAccountSyncState,readCaptureFile,readPriceUploadState,readRecorderSummary,readSimulatorHistory,rememberDirectory,rememberExecutionSync,restoreDirectory,restoreExecutionSync,seedPriceUploads} from '../lib/recorder-browser';
 import type {DirectoryPickerWindow,LastExecutionSync,RecorderDirectory,RecorderFileInfo,RecorderSummary} from '../lib/recorder-browser';
 import type {AccountHistory} from '../lib/types';
 import {isRecorderFile} from '../lib/recorder';
@@ -25,6 +25,7 @@ type RecorderState={
   syncEnabled:boolean;syncing:boolean;syncError:string;syncInfo:SyncInfo;activeAccounts:boolean;
   accountState:AccountStateData;accountStateError:string;accountStateLoading:boolean;
   refreshAccountState:()=>Promise<boolean>;syncAccounts:(force?:boolean)=>Promise<void>;setExecutionSync:(enabled:boolean)=>Promise<void>;
+  priceSync:{pending:number;at:number;uploading:boolean;error:string};priceRevision:number;
 };
 const RecorderContext=createContext<RecorderState|null>(null);
 const CloudRevisionContext=createContext(0);
@@ -44,6 +45,8 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
   const [simulation,setSimulation]=useState<AccountHistory|null>(null),[simulationError,setSimulationError]=useState('');
   const [syncEnabled,setSyncEnabled]=useState(true),[syncing,setSyncing]=useState(false),[syncError,setSyncError]=useState(''),[cloudRevision,setCloudRevision]=useState(0);
   const [syncInfo,setSyncInfo]=useState<SyncInfo>({pending:0,retained:0,accounts:[],last:null});
+  const [priceSync,setPriceSync]=useState({pending:0,at:0,uploading:false,error:''}),[priceRevision,setPriceRevision]=useState(0);
+  const priceWorking=useRef(false),priceRetry=useRef(0);
   const [activeAccounts,setActiveAccounts]=useState(false);
   const [accountState,setAccountState]=useState<AccountStateData>(EMPTY_ACCOUNT_STATE),[accountLoadError,setAccountLoadError]=useState(''),[accountUploadError,setAccountUploadError]=useState(''),[accountStateLoading,setAccountStateLoading]=useState(true);
   const accountStateError=[accountUploadError,accountLoadError].filter(Boolean).join(' ');
@@ -94,6 +97,29 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
     }catch(e){lastSyncOk.current=false;retryAfter.current=Date.now()+60000;if(alive.current)setSyncError(message(e));}
     finally{if(lastSyncOk.current&&pendingCount.current===0&&alive.current&&run===generation.current)await uploadAccountSnapshot();syncWorking.current=false;if(alive.current){setSyncing(false);if(imported)setCloudRevision(n=>n+1);}}
   },[refreshAccountState]);
+  const syncPrices=useCallback(async()=>{
+    if(priceWorking.current||syncAllowed.current!==true||syncWorking.current||pendingCount.current>0||Date.now()<priceRetry.current)return;
+    priceWorking.current=true;let uploaded=false;
+    try{
+      await seedPriceUploads();
+      if(alive.current)setPriceSync(previous=>({...previous,uploading:true}));
+      // Price backlog yields to executions and balances between small requests.
+      for(let batch=0;batch<12&&alive.current&&syncAllowed.current===true&&!syncWorking.current&&pendingCount.current===0;batch++){
+        const bars=await nextPriceUpload();if(!bars.length)break;
+        const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
+        try{
+          const response=await fetch('/api/prices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bars}),signal:controller.signal}),result=await response.json() as {confirmed?:number;error?:string};
+          if(!response.ok||result.confirmed!==bars.length)throw new Error(result.error||'Price archive did not confirm this batch.');
+          await acknowledgePriceUpload(bars);uploaded=true;
+        }finally{clearTimeout(timeout);}
+      }
+      priceRetry.current=0;if(alive.current)setPriceSync(previous=>({...previous,error:''}));
+    }catch(e){priceRetry.current=Date.now()+60000;if(alive.current)setPriceSync(previous=>({...previous,error:message(e)}));}
+    finally{
+      priceWorking.current=false;
+      try{const state=await readPriceUploadState();if(alive.current){setPriceSync(previous=>({...previous,...state,uploading:false}));if(uploaded)setPriceRevision(n=>n+1);}}catch(e){if(alive.current)setPriceSync(previous=>({...previous,uploading:false,error:message(e)}));}
+    }
+  },[]);
   const scan=useCallback(async(force=false)=>{
     const handle=directory.current;if(!handle||working.current)return false;
     if(!force&&Date.now()<nextScan.current)return false;
@@ -130,10 +156,10 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
       if(changed){await updateSummary();setRevision(r=>r+1);}
       setCheckedAt(Date.now());setPhase('watching');setActiveAccounts(accountsFound);setError([...errors.values()].slice(0,2).join(' '));
       setNotice(found||known.current.size?'':'No daily captures found. Choose the folder shown by the recorder’s “Copy saved-folder path” button (accounts-v2 for account recording).');
-      await syncAccounts(force);return errors.size===0&&lastSyncOk.current;
+      await syncAccounts(force);void syncPrices();return errors.size===0&&lastSyncOk.current;
     }catch(e){if(alive.current&&run===generation.current){if(permissionError(e))setPhase('permission');setError(message(e));}return false;}
     finally{working.current=false;if(alive.current)setBusy(false);}
-  },[updateSummary,syncAccounts]);
+  },[updateSummary,syncAccounts,syncPrices]);
   useEffect(()=>{
     alive.current=true;let cancelled=false;
     const capable=typeof (window as DirectoryPickerWindow).showDirectoryPicker==='function';setSupported(capable);
@@ -157,6 +183,7 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
     const timer=setInterval(check,30000);
     return()=>clearInterval(timer);
   },[refreshAccountState]);
+  useEffect(()=>{void syncPrices();const timer=setInterval(()=>void syncPrices(),15000);return()=>clearInterval(timer);},[syncPrices]);
   const setExecutionSync=useCallback(async(enabled:boolean)=>{
     syncAllowed.current=enabled;setSyncEnabled(enabled);if(!enabled)setSyncError('');
     try{await rememberExecutionSync(enabled);if(enabled)await syncAccounts(true);}catch(e){setSyncError(message(e));}
@@ -185,8 +212,8 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
       if(loaded){await updateSummary();setRevision(r=>r+1);if(!directory.current)setPhase('snapshot');setNotice(num(loaded)+' capture'+(loaded===1?'':'s')+' loaded locally.');await syncAccounts(true);}
       setError(errors.slice(0,2).join(' '));
     }catch(e){setError(message(e));}finally{working.current=false;setBusy(false);}
-  },[updateSummary,syncAccounts]);
-  const value=useMemo(()=>({phase,folder,busy,error,notice,checkedAt,summary,revision,supported,simulation,simulationError,syncEnabled,syncing,syncError,syncInfo,activeAccounts,accountState,accountStateError,accountStateLoading,refreshAccountState,syncAccounts,setExecutionSync,connect,resume,scan,disconnect,snapshots}),[phase,folder,busy,error,notice,checkedAt,summary,revision,supported,simulation,simulationError,syncEnabled,syncing,syncError,syncInfo,activeAccounts,accountState,accountStateError,accountStateLoading,refreshAccountState,syncAccounts,setExecutionSync,connect,resume,scan,disconnect,snapshots]);
+  },[updateSummary,syncAccounts,syncPrices]);
+  const value=useMemo(()=>({phase,folder,busy,error,notice,checkedAt,summary,revision,supported,simulation,simulationError,syncEnabled,syncing,syncError,syncInfo,activeAccounts,accountState,accountStateError,accountStateLoading,refreshAccountState,syncAccounts,setExecutionSync,connect,resume,scan,disconnect,snapshots,priceSync,priceRevision}),[phase,folder,busy,error,notice,checkedAt,summary,revision,supported,simulation,simulationError,syncEnabled,syncing,syncError,syncInfo,activeAccounts,accountState,accountStateError,accountStateLoading,refreshAccountState,syncAccounts,setExecutionSync,connect,resume,scan,disconnect,snapshots,priceSync,priceRevision]);
   return <RecorderContext.Provider value={value}><CloudRevisionContext.Provider value={cloudRevision}>{children}</CloudRevisionContext.Provider></RecorderContext.Provider>;
 }
 
@@ -202,16 +229,17 @@ export function RecorderConnection({onSimulator}:{onSimulator?:()=>void}){
   const newest=Math.max(r.summary.files.reduce((time,f)=>Math.max(time,f.savedAt),0),Date.parse(r.accountState.monitor?.capturedAt||'')||0),oldestDay=r.summary.files.at(-1)?.day,lastDay=r.summary.files[0]?.day;
   const warnings=r.summary.files.reduce((n,f)=>n+f.warnings,0),simFills=r.summary.files.reduce((n,f)=>n+f.simulatorFills,0);
   const watching=r.phase==='watching'&&!r.error,permission=r.phase==='permission';
-  return <section className="panel recorder-panel"><div className="recorder-intro"><div className="recorder-emblem"><FolderOpen size={25}/></div><div><div className="eyebrow">AUTOMATIC JOURNAL SYNC</div><h2>{watching?'Your recorder folder is connected':permission?'Allow the folder connection again':'Connect your recorder folder'}</h2><p>One connection brings in executions, account values and local candle charts.</p></div><span className={'recorder-state '+(watching?'live':'')}>{r.busy?<LoaderCircle size={13} className="spin"/>:watching?<CheckCircle2 size={13}/>:<Activity size={13}/>} {r.busy?'Checking files…':watching?'Watching folder':permission?'Permission needed':r.phase==='snapshot'?'Snapshot loaded':'Setup once'}</span></div>
+  return <section className="panel recorder-panel"><div className="recorder-intro"><div className="recorder-emblem"><FolderOpen size={25}/></div><div><div className="eyebrow">AUTOMATIC JOURNAL SYNC</div><h2>{watching?'Your recorder folder is connected':permission?'Allow the folder connection again':'Connect your recorder folder'}</h2><p>One connection brings in executions, account values and archived candle charts.</p></div><span className={'recorder-state '+(watching?'live':'')}>{r.busy?<LoaderCircle size={13} className="spin"/>:watching?<CheckCircle2 size={13}/>:<Activity size={13}/>} {r.busy?'Checking files…':watching?'Watching folder':permission?'Permission needed':r.phase==='snapshot'?'Snapshot loaded':'Setup once'}</span></div>
   <div className="recorder-overview"><div><strong>{r.folder||'Choose the folder copied from NinjaTrader'}</strong><p>{newest?'Latest saved data: '+dateLabel(centralDay(new Date(newest).toISOString()),true)+' · '+timeLabel(new Date(newest).toISOString())+' CT':'Waiting for your first recorder capture'}</p><small>{r.checkedAt?'Folder checked '+timeLabel(new Date(r.checkedAt).toISOString())+' CT':'Checks about every 30 seconds while active'}</small></div><div className="recorder-actions">{r.supported&&(!r.folder||permission)&&<button className="button primary small" disabled={r.busy||r.phase==='loading'} onClick={()=>void(permission?r.resume():r.connect())}><FolderOpen size={15}/>{permission?'Allow folder access':'Connect recorder folder'}</button>}</div></div>
-  {!!r.accountState.monitor&&['0.3.0','0.4.0'].includes(r.accountState.monitor.recorderVersion)&&<div className="notice"><strong>Recorder 0.4.1 is available</strong><p>Recorder 0.4.1 automatically captures NQ, MNQ, ES and MES executions. Apply the source update after trading if you have not already applied the MES patch. Keep optional candle collection off for the lowest load.</p><a className="text-button" href="/recorder/TradebookRecorder.cs?v=0.4.1" download>Download recorder 0.4.1 source <ArrowRight size={13}/></a></div>}
+  {!!r.accountState.monitor&&r.accountState.monitor.recorderVersion!=='0.5.0'&&<div className="notice"><strong>Recorder 0.5.0 is available</strong><p>Recorder 0.5.0 adds automatic chart-history catch-up after all monitored accounts are flat and idle for five minutes. Update the source once after trading; leave continuous candle collection off.</p><a className="text-button" href="/recorder/TradebookRecorder.cs?v=0.5.0" download>Download recorder 0.5.0 source <ArrowRight size={13}/></a></div>}
   <ExecutionSyncCard/>
+  <div className="notice"><strong>Price archive</strong><p>{r.priceSync.uploading?'Saving recorded candles…':r.priceSync.pending?num(r.priceSync.pending)+' candles waiting to archive':r.priceSync.at?'Recorded candles confirmed '+timeLabel(new Date(r.priceSync.at).toISOString())+' CT':'Waiting for recorded candles'}. Saved prices follow your journal across browsers. {r.priceSync.error&&<span className="negative">{r.priceSync.error} Unsaved candles will retry automatically.</span>}</p></div>
   {r.error&&<div className="error-box" role="alert">{r.error}</div>}{r.notice&&<div className="notice" role="status">{r.notice}</div>}{warnings>0&&<div className="notice" role="status">{num(warnings)} recorder warnings are present. Check Issues in the source capture before relying on its context.</div>}
-  <details className="recorder-tools"><summary>Folder setup & recovery <ArrowRight size={14}/></summary><div className="recorder-tool-body"><p>In NinjaTrader recorder 0.4.1, choose <b>Connected accounts</b>, start recording and click <b>Copy saved-folder path</b>. Connect its <b>accounts-v2</b> folder here in desktop Chrome. Your account prefixes control which accounts are recorded.</p><div className="recorder-actions">{r.supported&&<button className="button subtle small" disabled={r.busy||r.phase==='loading'} onClick={()=>void r.connect()}><FolderOpen size={14}/>{r.folder?'Choose another folder':'Choose recorder folder'}</button>}{r.folder&&<button className="text-button" disabled={r.busy} onClick={()=>void r.disconnect()}><Unplug size={13}/> Disconnect folder</button>}<a className="text-button" href="/recorder/TradebookRecorder.cs?v=0.4.1" download>Recorder source</a><a className="text-button" href="/recorder/START-HERE.md?v=0.4.1" download>Setup guide</a></div>
+  <details className="recorder-tools"><summary>Folder setup & recovery <ArrowRight size={14}/></summary><div className="recorder-tool-body"><p>In NinjaTrader recorder 0.5.0, choose <b>Connected accounts</b>, start recording and click <b>Copy saved-folder path</b>. Connect its <b>accounts-v2</b> folder here in desktop Chrome. Your account prefixes control which accounts are recorded.</p><div className="recorder-actions">{r.supported&&<button className="button subtle small" disabled={r.busy||r.phase==='loading'} onClick={()=>void r.connect()}><FolderOpen size={14}/>{r.folder?'Choose another folder':'Choose recorder folder'}</button>}{r.folder&&<button className="text-button" disabled={r.busy} onClick={()=>void r.disconnect()}><Unplug size={13}/> Disconnect folder</button>}<a className="text-button" href="/recorder/TradebookRecorder.cs?v=0.5.0" download>Recorder source</a><a className="text-button" href="/recorder/START-HERE.md?v=0.5.0" download>Setup guide</a></div>
   <div className="recorder-recovery-tools"><strong>Manual recovery & simulator test</strong><p>Load an XML snapshot when folder access is unavailable. Simulator snapshots use the separate simulator-v1 folder and remain excluded from your prop-account results.</p><div className="recorder-actions"><button className="button subtle small" disabled={r.busy} onClick={()=>input.current?.click()}><Upload size={14}/> Load XML snapshot</button><input ref={input} type="file" accept=".xml" multiple hidden onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value='';if(files.length)void r.snapshots(files);}}/>{onSimulator&&<button className="text-button" onClick={onSimulator}>Review Sim101 test trades <ArrowRight size={14}/></button>}{(!r.supported||permission)&&<a className="text-button" href="/" target="_blank" rel="noopener noreferrer">Open Tradebook in its own tab <ExternalLink size={12}/></a>}</div></div>
   {r.summary.barCount>0&&<div className="recorder-counts"><div><strong>{num(r.summary.barCount)}</strong><span>local candles</span></div><div><strong>{num(r.summary.files.length)}</strong><span>daily captures</span></div><div><strong>{oldestDay&&dateLabel(oldestDay,true)} – {lastDay&&dateLabel(lastDay,true)}</strong><span>price dates available</span></div><div><strong>{num(simFills)}</strong><span>Sim101 fills · excluded</span></div></div>}
   {!r.supported&&r.phase!=='loading'&&<p className="recorder-browser-hint">Folder reading needs desktop Chrome or Edge. You can still review saved journal data here or load a snapshot.</p>}</div></details>
-  <div className="recorder-footnote"><p>Keep NinjaTrader’s recorder and Tradebook open for updates. If Chrome closes, saved executions catch up when you reopen it with folder access. Light mode leaves price collection off. Raw candles stay on this computer; background checks run less often.</p><a className="text-button" href="/recorder/TradebookRecorder-0.4.1-source.zip" download>Download source and setup guide</a></div></section>;
+  <div className="recorder-footnote"><p>Keep NinjaTrader’s recorder and Tradebook open for updates. If Chrome closes, saved executions catch up when you reopen it with folder access. Recorder 0.5.0 catches up prices while flat and idle. Available candles upload automatically and stay with the journal. Older archive files are discovered about every ten minutes; background timers can be delayed.</p><a className="text-button" href="/recorder/TradebookRecorder-0.5.0-source.zip" download>Download source and setup guide</a></div></section>;
 }
 function ExecutionSyncCard(){
   const r=useRecorder(),last=r.syncInfo.last,monitor=r.accountState.monitor,fresh=monitorFresh(monitor);

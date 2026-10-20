@@ -9,7 +9,9 @@
 - FIFO realized accounting includes partial exits, per-fill fees, session grouping and checkpoint uncertainty.
 - Immutable account observations support conservative balance-adjustment detection, payout overlap checks and owner classification.
 - Payout estimates use 90% for recognized Lucid Flex 50K funded accounts. Inference never writes confirmed cash received or fabricates an approval reset.
-- Existing 0.4.1 recorder source captures NQ, MNQ, ES and MES executions; candle collection is optional.
+- Recorder 0.5.0 captures NQ, MNQ, ES and MES fills. Automatic price catch-up is enabled by default and pauses when trading: one provider calendar day per request, one outstanding request, all monitored accounts flat and five minutes without a fill or new account. It discovers exact contracts from available recent fills and retains progress for restart. Continuous price collection remains a separate optional mode.
+- One-minute candles are stored independently in D1 by exact contract and UTC minute, uploaded in retryable 240-row batches. Browser cache v4 queues existing candles gradually and prioritizes current dates; fills and account snapshots take priority. Charts merge cloud and local observations, preserving newer corrections and exposing missing data.
+- Migration `0006_purple_micromax.sql` creates only `price_bars`; no financial records are rewritten. Portable backups include keyset-paged candles. Owner-private maintenance supports a read-only backup action for authorized journal work.
 - The first GitHub snapshot replaces all owner histories/identifiers with synthetic fixtures and empty deployment defaults. Source-data boundaries differ from the private Site and must be preserved by the release adapter.
 
 ## Ownership
@@ -20,11 +22,13 @@
 
 ## Work queue
 
-No feature task is assigned merely by connecting a second session. The owner assigns each next task; record its scope in a PR. Avoid simultaneous schema/accounting edits unless the file ownership is explicit.
+Owner task (2026-10-20), branch `agent/owner/price-archive-20261020`: durable one-minute price history, automatic candle upload through the existing folder connection, cloud chart recovery, and bounded idle-only NinjaTrader historical catch-up. Owns the price schema/migration, recorder, browser price queue and chart. Accounting and strategy classification are outside this task. No competing schema PR was open at task start.
 
 ## Limits
 
 - The public repository does not provide production trading data to either session. Analysis of actual records requires separate owner-authorized journal access.
 - Balance inference depends on captured observations and execution coverage. Gaps and uncertain deductions remain visible; it cannot reconstruct absent historical cash observations.
 - Long-retention performance of the full balance-interval scan has not been validated at year-scale.
+- Historical catch-up covers the latest 35 calendar days for recently traded contracts, subject to provider availability. It does not reconstruct full-year prices or TradingView drawings, and cannot run while NinjaTrader is closed. The connected Chrome journal must be open at some point to upload saved files.
+- Native NinjaTrader compilation, provider timing and on-platform performance require validation on the owner's installation. Static C# checks cannot establish those results.
 - Managed Work browser preview requires the control-browser skill. Do not improvise a browser when the Sites skill says to skip it.

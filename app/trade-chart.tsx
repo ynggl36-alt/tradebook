@@ -5,6 +5,7 @@ import type {Fill,Trade} from '../lib/types';
 import type {PriceBar} from '../lib/recorder';
 import {aggregateBars,executionMarkers,markerCoverage} from '../lib/recorder';
 import {readPriceBars} from '../lib/recorder-browser';
+import {mergePriceBars} from '../lib/price-history';
 import {parseTimestamp} from '../lib/csv';
 import {centralDay} from '../lib/analytics';
 import {useRecorder} from './recorder-connection';
@@ -29,7 +30,22 @@ export function TradePriceChart({trade,fills,loading,onConnect}:{trade:Trade;fil
   const recorder=useRecorder(),[kind,setKind]=useState<WindowKind>('trade'),[raw,setRaw]=useState<PriceBar[]>([]),[reading,setReading]=useState(true),[error,setError]=useState(''),[hover,setHover]=useState<number|null>(null),[saving,setSaving]=useState(false);
   const svg=useRef<SVGSVGElement>(null);
   const range=useMemo(()=>chartRange(trade,kind),[trade.entry,trade.exit,kind]);
-  useEffect(()=>{let cancelled=false;setReading(true);setError('');setHover(null);readPriceBars(trade.contract,range.start,range.end).then(data=>{if(!cancelled)setRaw(data);}).catch(e=>{if(!cancelled){setError(e instanceof Error?e.message:String(e));setRaw([]);}}).finally(()=>{if(!cancelled)setReading(false);});return()=>{cancelled=true;};},[trade.contract,range.start,range.end,recorder.revision]);
+  useEffect(()=>{
+    let cancelled=false,controller:AbortController;
+    const load=async()=>{
+      controller=new AbortController();setReading(true);setError('');setHover(null);
+      const timeout=setTimeout(()=>controller.abort(),20000);
+      const [local,cloud]=await Promise.allSettled([
+        readPriceBars(trade.contract,range.start,range.end),
+        (async()=>{const params=new URLSearchParams({contract:trade.contract,start:String(range.start),end:String(range.end)}),response=await fetch('/api/prices?'+params,{cache:'no-store',signal:controller.signal}),data=await response.json() as {bars:PriceBar[];error?:string};if(!response.ok)throw new Error(data.error||'Cloud price history could not load.');return data.bars;})(),
+      ]);
+      clearTimeout(timeout);if(cancelled)return;
+      setRaw(mergePriceBars(cloud.status==='fulfilled'?cloud.value:[],local.status==='fulfilled'?local.value:[]));
+      setError(cloud.status==='rejected'?'Cloud price history could not load. Showing available local candles; it will retry.':local.status==='rejected'?'Device storage is unavailable. Showing cloud candles.':'');setReading(false);
+    };
+    void load();const timer=setInterval(()=>{if(document.visibilityState==='visible')void load();},60000);
+    return()=>{cancelled=true;controller?.abort();clearInterval(timer);};
+  },[trade.contract,range.start,range.end,recorder.revision,recorder.priceRevision]);
   const minutes=options.find(o=>o.id===kind)!.minutes;
   const bars=useMemo(()=>aggregateBars(raw,minutes),[raw,minutes]);
   const markers=useMemo(()=>executionMarkers(trade,fills),[trade,fills]);
@@ -55,7 +71,7 @@ export function TradePriceChart({trade,fills,loading,onConnect}:{trade:Trade;fil
   const chartControls=<div className="price-controls"><div className="segmented">{options.map(o=><button key={o.id} className={kind===o.id?'selected':''} onClick={()=>setKind(o.id)}>{o.label}</button>)}</div>{bars.length>0&&<button className="icon-btn" title="Save chart as PNG" aria-label="Save chart as PNG" disabled={saving||loading||reading} onClick={()=>void saveChart()}>{saving?<LoaderCircle size={16} className="spin"/>:<Download size={16}/>}</button>}</div>;
   if(!bars.length){
     const hasSource=!!recorder.folder||recorder.summary.barCount>0,permission=recorder.phase==='permission';
-    const status=reading?'Checking saved candles…':permission?'Folder access needed':hasSource?'Not recorded for this trade':'Recorder not connected';
+    const status=reading?'Checking saved candles…':error?'Price history needs attention':'Not yet archived for this trade';
     return <details className="inner-panel price-panel price-empty-panel"><summary><span>Price history</span><small>{status}</small><ChevronRight size={14}/></summary><PanelTitle title="Recorded price history" sub={trade.contract+' · exact-contract candles'} action={chartControls}/><div className="price-empty">{reading?<><LoaderCircle size={23} className="spin"/><strong>Reading saved candles…</strong></>:<><FolderOpen size={27}/><strong>{permission?'Allow folder access to read price history':hasSource?'Price history was not recorded for this trade':'Connect your recorder for price history'}</strong><p>{permission?'Resume folder access in Settings to read saved candles.':hasSource?'This capture has no '+trade.contract+' candles around '+dateLabel(centralDay(trade.entry),true)+'. Try a wider window or add a capture containing those prices.':'Connect the recorder folder in Settings or import a saved snapshot containing price history.'}</p><button className="button subtle small" onClick={onConnect}>{hasSource?'Price history settings':'Connect recorder'}</button></>}{error&&<p className="negative" role="alert">{error}</p>}</div></details>;
   }
 

@@ -43,6 +43,13 @@
       "when": 1792439257164,
       "tag": "0005_careless_captain_britain",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792533595818,
+      "tag": "0006_purple_micromax",
+      "breakpoints": true
     }
   ]
 }

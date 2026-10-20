@@ -7,7 +7,7 @@ import type {AccountFill} from './recorder-sync';
 export type PriceBar = {
   id: string; contract: string; start: number; end: number;
   open: number; high: number; low: number; close: number; volume: number;
-  capturedAt: number;
+  capturedAt: number;observed?:boolean;
 };
 export type CaptureRows = {
   root: Record<string,string>;
@@ -89,9 +89,11 @@ export function validateCapture(rows: CaptureRows, filename?: string): RecorderC
     const open = number(raw.Open,'open'), high = number(raw.High,'high'), low = number(raw.Low,'low'), close = number(raw.Close,'close'), volume = number(raw.Volume,'volume');
     if (Math.min(open,high,low,close) <= 0 || high < Math.max(open,close) || low > Math.min(open,close) || low > high || volume < 0 || !Number.isSafeInteger(volume))
       throw new Error('A candle has inconsistent prices or volume.');
+    const observedAt=raw.ObservedAtUtc?utc(raw.ObservedAtUtc,'price observation time'):savedAt;
+    if(observedAt<end||observedAt>savedAt)throw new Error('Invalid price observation timestamp.');
     const start = end - 60000, id = contract + '|' + start;
     if (unique.has(id)) throw new Error('Duplicate candles were found in one capture.');
-    unique.set(id,{id,contract,start,end,open,high,low,close,volume,capturedAt:savedAt});
+    unique.set(id,{id,contract,start,end,open,high,low,close,volume,capturedAt:observedAt,...(raw.ObservedAtUtc?{observed:true}:{})});
   }
   const bars = [...unique.values()].sort((a,b) => a.start - b.start || a.contract.localeCompare(b.contract));
   return {day:root.day,savedAt,version:root.recorderVersion || 'unknown',mode:root.mode as RecorderCapture['mode'],warnings:Math.max(warningCount,rows.issueCount),simulatorFills:live?0:executions.length,contracts:[...new Set(bars.map(b=>b.contract))].sort(),bars,simulation:live?[]:executions,accountFills:live?executions:[]};

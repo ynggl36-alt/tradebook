@@ -1,4 +1,4 @@
-// Tradebook Recorder 0.4.1 - PASSIVE ACCOUNT RECORDER
+// Tradebook Recorder 0.5.0 - PASSIVE ACCOUNT RECORDER
 // Replace the entire existing TradebookRecorder AddOn source with this file.
 // Reads executions, account values, positions and prices. No network client or order-entry commands.
 // Compile and compare the available account executions before relying on it.
@@ -82,6 +82,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal bool AutoStart;
         internal bool SimulatorOnly;
         internal bool RecordPrices;
+        internal bool AutoHistory = true;
         internal int PriceHistoryDays;
         internal string Contracts = "MNQ 12-26; NQ 12-26";
         internal string Prefixes = "LFE; LFF";
@@ -103,6 +104,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 value.SimulatorOnly = (string)root.Attribute("mode") == "Sim101Only";
                 // Older settings migrate to light mode; price history is explicit opt-in.
                 value.RecordPrices = (string)root.Attribute("recordPrices") == "true";
+                value.AutoHistory = (string)root.Attribute("autoHistory") != "false";
                 int history;
                 value.PriceHistoryDays = Int32.TryParse((string)root.Attribute("priceHistoryDays"), out history) ? Math.Max(0, Math.Min(7, history)) : 0;
             }
@@ -119,6 +121,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 new XAttribute("autoStart", AutoStart ? "true" : "false"),
                 new XAttribute("mode", SimulatorOnly ? "Sim101Only" : "AccountsReadOnly"),
                 new XAttribute("recordPrices", RecordPrices ? "true" : "false"),
+                new XAttribute("autoHistory", AutoHistory ? "true" : "false"),
                 new XAttribute("priceHistoryDays", PriceHistoryDays))).Save(temporary);
             if (File.Exists(SettingsPath)) File.Replace(temporary, SettingsPath, SettingsPath + ".previous");
             else File.Move(temporary, SettingsPath);
@@ -135,6 +138,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly CheckBox autoStart = new CheckBox { Content = "Start this recorder automatically with NinjaTrader", Margin = new Thickness(0, 0, 0, 10) };
         private readonly Button stop = new Button { Content = "Stop and save", IsEnabled = false, Padding = new Thickness(12, 6, 12, 6) };
         private readonly CheckBox recordPrices = new CheckBox { Content = "Also collect one-minute prices (optional; adds platform work)", Margin = new Thickness(0, 6, 0, 6) };
+        private readonly CheckBox autoHistory = new CheckBox { Content = "Catch up chart history automatically while flat and idle", Margin = new Thickness(0, 6, 0, 6) };
         private readonly TextBox historyDays = new TextBox { Text = "0", Width = 45, HorizontalAlignment = HorizontalAlignment.Left };
         private readonly DispatcherTimer refresh = new DispatcherTimer();
         private TradebookCapture capture;
@@ -152,6 +156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             mode.SelectedIndex = settings.SimulatorOnly ? 1 : 0;
             autoStart.IsChecked = settings.AutoStart;
             recordPrices.IsChecked = settings.RecordPrices;
+            autoHistory.IsChecked = settings.AutoHistory;
             historyDays.Text = settings.PriceHistoryDays.ToString(CultureInfo.InvariantCulture);
             historyDays.IsEnabled = settings.RecordPrices;
             recordPrices.Click += delegate { historyDays.IsEnabled = recordPrices.IsChecked == true && capture == null; };
@@ -161,8 +166,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             MinWidth = 520;
             MinHeight = 450;
             StackPanel panel = new StackPanel { Margin = new Thickness(20), Background = SystemColors.WindowBrush };
-            panel.Children.Add(Label("PASSIVE RECORDER - version 0.4.1", 20));
-            panel.Children.Add(Label("Light mode records fills and connected-account snapshots. Minute-price collection is optional. Chrome reads the saved folder and syncs your private journal.", 14));
+            panel.Children.Add(Label("PASSIVE RECORDER - version 0.5.0", 20));
+            panel.Children.Add(Label("Light mode records fills and connected-account snapshots. Automatic chart catch-up waits until you are flat and idle. Chrome reads the saved folder and syncs your private journal.", 14));
             panel.Children.Add(mode);
             panel.Children.Add(autoStart);
             panel.Children.Add(Label("Account name prefixes, separated by semicolons (LFE / LFF covers your Lucid evaluations and funded accounts):", 13));
@@ -170,6 +175,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             panel.Children.Add(Label("Optional candle contracts, separated by semicolons (maximum two):", 13));
             panel.Children.Add(contracts);
             panel.Children.Add(Label("Execution capture automatically includes NQ, MNQ, ES and MES across expiries. The contract boxes above select optional candle data only. Connected accounts are discovered automatically. Keep this window open. Sim101 test mode requires Sim101 to be flat at startup.", 13));
+            panel.Children.Add(autoHistory);
+            panel.Children.Add(Label("Automatic history follows your traded contracts, one day at a time, after all monitored accounts are flat and no fills have occurred for five minutes. Leave this on and continuous prices off for normal use.", 12));
             panel.Children.Add(recordPrices);
             panel.Children.Add(Label("Optional price history: days back (0 = today only; maximum 7). Leave prices off during normal trading for the lowest load.", 12));
             panel.Children.Add(historyDays);
@@ -206,7 +213,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void SaveSettings()
         {
             new TradebookRecorderSettings { Contracts = contracts.Text, Prefixes = prefixes.Text, SimulatorOnly = mode.SelectedIndex == 1, AutoStart = autoStart.IsChecked == true,
-                RecordPrices = recordPrices.IsChecked == true, PriceHistoryDays = ReadHistoryDays() }.Save();
+                RecordPrices = recordPrices.IsChecked == true, AutoHistory = autoHistory.IsChecked == true, PriceHistoryDays = ReadHistoryDays() }.Save();
         }
 
         private int ReadHistoryDays()
@@ -229,7 +236,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (capture != null || stopping) return;
                 SaveSettings();
-                capture = new TradebookCapture(contracts.Text, prefixes.Text, mode.SelectedIndex == 1, recordPrices.IsChecked == true, ReadHistoryDays());
+                capture = new TradebookCapture(contracts.Text, prefixes.Text, mode.SelectedIndex == 1, recordPrices.IsChecked == true, ReadHistoryDays(), autoHistory.IsChecked == true);
                 capture.Start();
                 start.IsEnabled = false;
                 stop.IsEnabled = true;
@@ -237,6 +244,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 mode.IsEnabled = false;
                 prefixes.IsEnabled = false;
                 recordPrices.IsEnabled = false;
+                autoHistory.IsEnabled = false;
                 historyDays.IsEnabled = false;
             }
             catch (Exception error)
@@ -278,6 +286,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     mode.IsEnabled = true;
                     prefixes.IsEnabled = true;
                     recordPrices.IsEnabled = true;
+                    autoHistory.IsEnabled = true;
                     historyDays.IsEnabled = recordPrices.IsChecked == true;
                     if (closeAfterStop)
                     {
@@ -296,6 +305,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal readonly string OutputFolder;
         private readonly bool simulatorOnly;
         private readonly bool recordPrices;
+        private readonly bool automaticHistory;
+        private readonly object historyGate = new object();
+        private readonly Dictionary<string, DateTime> historyTargets = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private readonly Dictionary<string, DateTime> historyChecks = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private readonly Dictionary<string, DateTime> historyRetries = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private bool historyDirty;
+        private Feed historyFeed;
+        private DateTime nextHistoryUtc;
+        private long lastLiveExecutionTicks = DateTime.UtcNow.Ticks;
         private readonly int historyDays;
         private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
         private readonly string[] instruments;
@@ -339,14 +357,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             get
             {
                 lock (messageGate)
-                    return (stopped ? "Stopped. " : simulatorOnly ? "Sim101 test. " : "Accounts read-only. ") + message + "\nConnected accounts monitored: " + accountCount + ". Inactive accounts skipped: " + inactiveCount + ". Prices: " + (recordPrices ? "on" : "off") + ". Observed this run: " + observedFills + " fill records; " + observedBars + " candles. Warnings: " + warnings + ".\n" + OutputFolder;
+                    return (stopped ? "Stopped. " : simulatorOnly ? "Sim101 test. " : "Accounts read-only. ") + message + "\nConnected accounts monitored: " + accountCount + ". Inactive accounts skipped: " + inactiveCount + ". Prices: " + (recordPrices ? "continuous" : automaticHistory ? "automatic while idle" : "off") + ". Observed this run: " + observedFills + " fill records; " + observedBars + " candles. Warnings: " + warnings + ".\n" + OutputFolder;
             }
         }
 
-        internal TradebookCapture(string contractText, string prefixText, bool simOnly, bool collectPrices, int lookbackDays)
+        internal TradebookCapture(string contractText, string prefixText, bool simOnly, bool collectPrices, int lookbackDays, bool autoPrices)
         {
             simulatorOnly = simOnly;
             recordPrices = collectPrices;
+            automaticHistory = autoPrices;
             historyDays = Math.Max(0, Math.Min(7, lookbackDays));
             OutputFolder = FolderFor(simOnly);
             accountPrefixes = prefixText.Split(';').Select(s => s.Trim()).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -372,6 +391,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             Directory.CreateDirectory(OutputFolder);
             fileLock = new FileStream(Path.Combine(OutputFolder, "recorder.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            LoadHistoryProgress();
             accepting = true;
             writer = Task.Factory.StartNew(WriteLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             SetMessage("Light recording; fills save about every 10 seconds; account snapshots about every 60 seconds.");
@@ -433,6 +453,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         current.ExecutionUpdate += OnExecution;
                         if (!simulatorOnly) current.AccountItemUpdate += OnAccountValue;
                         accounts.Add(current.Name, current);
+                        Interlocked.Exchange(ref lastLiveExecutionTicks, DateTime.UtcNow.Ticks);
                         recovery[current.Name] = new RecoveryState();
                         nextStateUtc = DateTime.MinValue;
                     }
@@ -452,7 +473,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void OnExecution(object sender, ExecutionEventArgs e)
         {
             if (!accepting) return;
-            try { CaptureExecution(e.Execution, e.Quantity, e.Price); }
+            try { Interlocked.Exchange(ref lastLiveExecutionTicks, DateTime.UtcNow.Ticks); CaptureExecution(e.Execution, e.Quantity, e.Price); }
             catch (Exception error) { Warn("Execution capture: " + error.Message); }
         }
 
@@ -496,6 +517,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (Enqueue(delegate { SaveAccountState(state); })) nextStateUtc = DateTime.UtcNow.AddSeconds(60);
                 }
                 foreach (Account account in currentAccounts) RecoverAccount(account, false);
+                AdvanceHistory(currentAccounts);
                 Feed[] currentFeeds;
                 lock (feeds) currentFeeds = feeds.ToArray();
                 foreach (Feed feed in currentFeeds)
@@ -532,7 +554,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             DateTime now = DateTime.UtcNow;
             XElement root = new XElement("TradebookAccountState", new XAttribute("schemaVersion", "1"),
-                new XAttribute("mode", "AccountsReadOnly"), new XAttribute("recorderVersion", "0.4.1"),
+                new XAttribute("mode", "AccountsReadOnly"), new XAttribute("recorderVersion", "0.5.0"),
                 new XAttribute("capturedAtUtc", Stamp(now)), new XAttribute("running", running ? "true" : "false"),
                 new XAttribute("scopePrefixes", String.Join(";", accountPrefixes)));
             foreach (Account account in currentAccounts)
@@ -646,6 +668,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (queuedExecutions.TryGetValue(copy.Key, out prior) && prior.SameAs(copy)) return;
                 if (Enqueue(delegate { ProcessExecution(copy); }))
                 {
+                    Interlocked.Exchange(ref lastLiveExecutionTicks, DateTime.UtcNow.Ticks);
                     if (queuedExecutions.Count >= 50000) queuedExecutions.Clear();
                     queuedExecutions[copy.Key] = copy;
                 }
@@ -670,6 +693,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 new XAttribute("RawAccountPosition", copy.Position), new XAttribute("ActionSource", copy.ActionSource),
                 new XAttribute("SourceTime", copy.Time.ToString("yyyy-MM-ddTHH:mm:ss.fffffff", Invariant)), new XAttribute("SourceTimeZone", sourceZone.Id));
             if (GetDay(Day(utc)).Put(record)) Interlocked.Increment(ref observedFills);
+            if (automaticHistory && utc >= DateTime.UtcNow.AddDays(-35))
+            {
+                lock (historyGate)
+                {
+                    DateTime prior;
+                    if (!historyTargets.TryGetValue(copy.Instrument, out prior) || prior < utc)
+                    {
+                        historyTargets[copy.Instrument] = utc;
+                        historyDirty = true;
+                    }
+                }
+            }
         }
 
         private sealed class ExecutionCopy
@@ -700,6 +735,166 @@ namespace NinjaTrader.NinjaScript.AddOns
             internal DateTime NextFullUtc;
         }
 
+        private string HistoryPath { get { return Path.Combine(OutputFolder, "price-progress-v1.xml"); } }
+
+        private void LoadHistoryProgress()
+        {
+            try
+            {
+                if (!File.Exists(HistoryPath) || new FileInfo(HistoryPath).Length > 250000) return;
+                XmlReaderSettings options = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 250000 };
+                XElement root;
+                using (XmlReader reader = XmlReader.Create(HistoryPath, options)) root = XDocument.Load(reader).Root;
+                if (root == null || root.Name != "TradebookPriceProgress") return;
+                foreach (XElement row in root.Elements("Target"))
+                {
+                    DateTime traded;
+                    string contract = (string)row.Attribute("contract") ?? "";
+                    if (System.Text.RegularExpressions.Regex.IsMatch(contract, @"^(MNQ|NQ|MES|ES) (0[1-9]|1[0-2])-\d{2}$")
+                        && DateTime.TryParse((string)row.Attribute("at"), Invariant, DateTimeStyles.RoundtripKind, out traded)
+                        && traded.Kind == DateTimeKind.Utc && traded >= DateTime.UtcNow.AddDays(-35)) historyTargets[contract] = traded;
+                }
+                foreach (XElement row in root.Elements("Checked"))
+                {
+                    DateTime at;
+                    string key = (string)row.Attribute("key") ?? "";
+                    if (key.Length < 160 && DateTime.TryParse((string)row.Attribute("at"), Invariant, DateTimeStyles.RoundtripKind, out at)
+                        && at.Kind == DateTimeKind.Utc && at >= DateTime.UtcNow.AddDays(-7)) historyChecks[key] = at;
+                }
+            }
+            catch (Exception error) { Warn("Price progress will retry: " + error.Message); }
+        }
+
+        // Called on the file writer, with historyGate held. This ledger is a cache;
+        // raw daily XML is saved before a completed request is acknowledged here.
+        private void SaveHistoryProgress()
+        {
+            try
+            {
+            foreach (string key in historyTargets.Where(p => p.Value < DateTime.UtcNow.AddDays(-35)).Select(p => p.Key).ToArray()) historyTargets.Remove(key);
+            foreach (string key in historyChecks.Where(p => p.Value < DateTime.UtcNow.AddDays(-7)).Select(p => p.Key).ToArray()) historyChecks.Remove(key);
+            XElement root = new XElement("TradebookPriceProgress",
+                historyTargets.Select(p => new XElement("Target", new XAttribute("contract", p.Key), new XAttribute("at", Stamp(p.Value)))),
+                historyChecks.Select(p => new XElement("Checked", new XAttribute("key", p.Key), new XAttribute("at", Stamp(p.Value)))));
+            string temporary = HistoryPath + ".writing";
+            new XDocument(root).Save(temporary);
+            if (File.Exists(HistoryPath)) File.Replace(temporary, HistoryPath, null); else File.Move(temporary, HistoryPath);
+            historyDirty = false;
+            }
+            catch (Exception error) { historyDirty = true; SetMessage("Price progress could not save; raw captures are retained: " + error.Message); }
+        }
+
+        private bool HistoryIdle(Account[] current)
+        {
+            if (!accepting || current.Length == 0 || DateTime.UtcNow.Ticks - Interlocked.Read(ref lastLiveExecutionTicks) < TimeSpan.FromMinutes(5).Ticks) return false;
+            try
+            {
+                foreach (Account account in current)
+                {
+                    if (!Connected(account)) return false;
+                    lock (account.Positions) if (account.Positions.Any(p => p.Quantity != 0)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private void AdvanceHistory(Account[] current)
+        {
+            if (!automaticHistory || recordPrices) return;
+            lock (historyGate)
+            {
+                if (!HistoryIdle(current))
+                {
+                    if (historyFeed != null) { try { historyFeed.Request.Dispose(); } catch { } historyFeed = null; }
+                    return;
+                }
+                if (historyFeed != null)
+                {
+                    if (DateTime.UtcNow >= historyFeed.RetryAfterUtc) { historyRetries[historyFeed.HistoryKey] = DateTime.UtcNow.AddMinutes(10); try { historyFeed.Request.Dispose(); } catch { } historyFeed = null; nextHistoryUtc = DateTime.UtcNow.AddSeconds(30); }
+                    return;
+                }
+                if (DateTime.UtcNow < nextHistoryUtc) return;
+                DateTime today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, sourceZone).Date;
+                // Only contracts actually observed in fills. No manual symbol or
+                // rollover maintenance; old expiries are never merged together.
+                string[] targets = historyTargets.Where(p => p.Value >= DateTime.UtcNow.AddDays(-35)).OrderByDescending(p => p.Value).Select(p => p.Key).ToArray();
+                for (int daysBack = 0; daysBack < 35; daysBack++)
+                {
+                    DateTime date = today.AddDays(-daysBack);
+                    if (date.Year < 2026) break;
+                    foreach (string contract in targets)
+                    {
+                        string key = sourceZone.Id + "|" + contract + "|" + date.ToString("yyyy-MM-dd", Invariant);
+                        DateTime retryAt;
+                        if (historyRetries.TryGetValue(key, out retryAt) && DateTime.UtcNow < retryAt) continue;
+                        DateTime checkedAt;
+                        if (historyChecks.TryGetValue(key, out checkedAt) && (daysBack == 0
+                            ? checkedAt >= historyTargets[contract] && DateTime.UtcNow < checkedAt.AddMinutes(30)
+                            : DateTime.UtcNow < checkedAt.AddDays(7))) continue;
+                        RequestHistoryDay(contract, date, key);
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void RequestHistoryDay(string contract, DateTime date, string key)
+        {
+            Feed feed = new Feed { Instrument = contract, HistoryKey = key, RetryAfterUtc = DateTime.UtcNow.AddSeconds(90) };
+            nextHistoryUtc = DateTime.UtcNow.AddSeconds(30);
+            try
+            {
+                feed.Request = new BarsRequest(Instrument.GetInstrument(contract), date, date.AddDays(1).AddTicks(-1));
+                feed.Request.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
+                feed.Request.TradingHours = TradingHours.Get("Default 24 x 7");
+                feed.Request.MergePolicy = MergePolicy.DoNotMerge;
+                feed.Request.LookupPolicy = LookupPolicies.Provider;
+                historyFeed = feed;
+                // One-shot historical request. There is no market-data Update subscription.
+                feed.Request.Request(new Action<BarsRequest, ErrorCode, string>(delegate(BarsRequest request, ErrorCode code, string error)
+                {
+                    Task.Run(delegate { CompleteHistoryDay(feed, key, code, error); });
+                }));
+            }
+            catch (Exception error)
+            {
+                historyFeed = null; historyRetries[key] = DateTime.UtcNow.AddMinutes(10);
+                if (feed.Request != null) feed.Request.Dispose();
+                SetMessage("Historical prices will retry: " + error.Message);
+            }
+        }
+
+        private void CompleteHistoryDay(Feed feed, string key, ErrorCode code, string error)
+        {
+            try
+            {
+                    lock (snapshotGate)
+                    lock (historyGate)
+                    {
+                        if (!Object.ReferenceEquals(historyFeed, feed)) return;
+                        try
+                        {
+                            if (!HistoryIdle(SynchronizeAccounts())) return;
+                            if (code != ErrorCode.NoError) { historyRetries[key] = DateTime.UtcNow.AddMinutes(10); SetMessage("Historical prices waiting for provider: " + code + ". Execution recording continues."); return; }
+                            if (feed.Request.Bars.Count > 1600) { historyRetries[key] = DateTime.UtcNow.AddMinutes(10); Warn("Historical day request exceeded its candle limit."); return; }
+                            bool captured = CaptureClosedBars(feed);
+                            DateTime confirmedAt = DateTime.UtcNow;
+                            // Empty responses retry later, rather than becoming a claim
+                            // that an unavailable day has a complete price archive.
+                            if (captured) Enqueue(delegate
+                            {
+                                SaveDays();
+                                lock (historyGate) { historyChecks[key] = confirmedAt; historyDirty = true; SaveHistoryProgress(); }
+                            });
+                            else historyRetries[key] = DateTime.UtcNow.AddHours(1);
+                        }
+                        finally { historyFeed = null; feed.Request.Dispose(); }
+                    }
+            }
+            catch (Exception processingError) { SetMessage("Historical prices will retry: " + processingError.Message); }
+        }
+
         private void RequestPrices(string contract)
         {
             DateTime now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, sourceZone);
@@ -723,15 +918,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             }));
         }
 
-        private void CaptureClosedBars(Feed feed)
+        private bool CaptureClosedBars(Feed feed)
         {
-            if (!accepting) return;
+            if (!accepting) return false;
             try
             {
                 lock (feed.Gate)
                 {
                     // Minute exports do not need to scan on every market-data tick.
-                    if (DateTime.UtcNow < feed.NextReadUtc) return;
+                    if (DateTime.UtcNow < feed.NextReadUtc) return false;
                     feed.NextReadUtc = DateTime.UtcNow.AddSeconds(5);
                     int last = feed.Request.Bars.Count - 1;
                     // Finalize a minute from its end timestamp, also when no next tick
@@ -739,8 +934,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     DateTime cutoff = DateTime.UtcNow.AddSeconds(-2);
                     while (last >= 0 && ToUtc(feed.Request.Bars.GetTime(last)) > cutoff) last--;
                     if (last < feed.LastClosed) feed.LastClosed = -1; // Re-read after a series reset; keys de-duplicate.
-                    if (last <= feed.LastClosed) return;
-                    if (last - feed.LastClosed > 25000) { Warn("Unexpected price-history size; restart this test with a shorter request."); return; }
+                    if (last <= feed.LastClosed) return false;
+                    if (last - feed.LastClosed > 25000) { Warn("Unexpected price-history size; restart this test with a shorter request."); return false; }
                     List<KeyValuePair<string, XElement>> records = new List<KeyValuePair<string, XElement>>();
                     for (int i = feed.LastClosed + 1; i <= last; i++)
                     {
@@ -750,6 +945,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             new XAttribute("key", "bar|" + feed.Instrument + "|" + Stamp(end)),
                             new XAttribute("Instrument", feed.Instrument), new XAttribute("IntervalSeconds", 60),
                             new XAttribute("BarEndUtc", Stamp(end)), new XAttribute("TimestampConvention", "end-of-bar"),
+                            new XAttribute("ObservedAtUtc", Stamp(DateTime.UtcNow)),
                             new XAttribute("Open", feed.Request.Bars.GetOpen(i).ToString("R", Invariant)),
                             new XAttribute("High", feed.Request.Bars.GetHigh(i).ToString("R", Invariant)),
                             new XAttribute("Low", feed.Request.Bars.GetLow(i).ToString("R", Invariant)),
@@ -764,10 +960,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         foreach (KeyValuePair<string, XElement> record in records)
                             if (GetDay(record.Key).Put(record.Value)) Interlocked.Increment(ref observedBars);
-                    })) feed.LastClosed = last;
+                    })) { feed.LastClosed = last; return true; }
                 }
             }
             catch (Exception error) { Warn("Price capture for " + feed.Instrument + ": " + error.Message); }
+            return false;
         }
 
         private DateTime ToUtc(DateTime value)
@@ -849,6 +1046,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string issue;
             while (issueLog.TryDequeue(out issue)) GetDay(Day(DateTime.UtcNow)).AddIssue(issue);
             foreach (CaptureDay day in days.Values) day.Save(sourceZone.Id, warnings, exportCsv);
+            lock (historyGate) { if (historyDirty) SaveHistoryProgress(); }
         }
 
         internal void StopAndSave()
@@ -884,6 +1082,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!recoveryNeeded.IsEmpty) Warn("Some fills still need recovery. Compare this capture with NinjaTrader or import an execution export.");
                     lock (executionGate) { accepting = false; work.CompleteAdding(); }
                     lock (accountGate) { accounts.Clear(); accountCount = 0; }
+                    lock (historyGate) { if (historyFeed != null) { try { historyFeed.Request.Dispose(); } catch { } historyFeed = null; } }
                     Feed[] closingFeeds;
                     lock (feeds) { closingFeeds = feeds.ToArray(); feeds.Clear(); }
                     foreach (Feed feed in closingFeeds)
@@ -912,6 +1111,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             internal readonly object Gate = new object();
             internal string Instrument;
+            internal string HistoryKey;
             internal BarsRequest Request;
             internal EventHandler<BarsUpdateEventArgs> Handler;
             internal volatile bool Ready;
@@ -965,6 +1165,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (record.Name == "Execution") record.SetAttributeValue("Sequence", (long?)old.Attribute("Sequence") ?? ++lastExecutionSequence);
                     if (XNode.DeepEquals(old, record)) return false;
+                    if (record.Name == "MinuteBar")
+                    {
+                        XElement beforePrice = new XElement(old), afterPrice = new XElement(record);
+                        beforePrice.SetAttributeValue("ObservedAtUtc", null); afterPrice.SetAttributeValue("ObservedAtUtc", null);
+                        if (XNode.DeepEquals(beforePrice, afterPrice)) { records[key] = record; dirty = true; return false; }
+                    }
                     revisions.Add(new XElement("Revision", new XAttribute("observedAtUtc", Stamp(DateTime.UtcNow)), new XElement("Before", new XElement(old)), new XElement("After", new XElement(record))));
                 }
                 else if (record.Name == "Execution") record.SetAttributeValue("Sequence", ++lastExecutionSequence);
@@ -987,7 +1193,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return;
                 }
                 XElement root = new XElement("TradebookCapture",
-                    new XAttribute("schemaVersion", "1"), new XAttribute("recorderVersion", "0.4.1"),
+                    new XAttribute("schemaVersion", "1"), new XAttribute("recorderVersion", "0.5.0"),
                     new XAttribute("mode", simulatorOnly ? "Sim101Only" : "AccountsReadOnly"), new XAttribute("day", day),
                     new XAttribute("dayTimeZone", "America/Chicago"), new XAttribute("platformTimeZone", sourceTimeZone),
                     new XAttribute("savedAtUtc", Stamp(DateTime.UtcNow)), new XAttribute("warningCountThisRun", warningCount),

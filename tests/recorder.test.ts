@@ -114,3 +114,12 @@ test('light-mode 0.4 captures use the existing fill identity and accept executio
  const light=validateCapture(input,'2026-10-16.accounts.tradebook.xml');assert.equal(light.version,'0.4.0');assert.equal(light.accountFills.length,1);assert.equal(light.accountFills[0].id,'sim-entry');assert.equal(light.accountFills[0].price,30200);assert.equal(light.bars.length,0);
  input.bars=rows().bars;const retained=validateCapture(input,'2026-10-16.accounts.tradebook.xml');assert.equal(retained.bars.length,1);assert.deepEqual(retained.accountFills,light.accountFills);
 });
+
+
+test('per-candle observation times survive unrelated file saves and reject impossible source times',()=>{
+ const input=rows();input.bars[0].ObservedAtUtc='2026-10-16T13:42:00Z';
+ const first=validateCapture(input).bars[0];assert.equal(first.capturedAt,Date.parse(input.bars[0].ObservedAtUtc));assert.equal(first.observed,true);
+ input.root.savedAtUtc='2026-10-16T19:00:00Z';assert.equal(validateCapture(input).bars[0].capturedAt,first.capturedAt);
+ input.bars[0].ObservedAtUtc='2026-10-16T13:40:00Z';assert.throws(()=>validateCapture(input),/observation/);
+ input.bars[0].ObservedAtUtc='2026-10-16T20:00:00Z';assert.throws(()=>validateCapture(input),/observation/);
+});
