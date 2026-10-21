@@ -4,10 +4,11 @@ import Module from 'node:module';
 
 let requestHeaders = new Headers();
 let journalReads = 0;
-let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0,gapReads=0;
+let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0,gapReads=0,trendReads=0;
 const importedPayloads:Record<string,unknown>[]=[];
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function(name: string, ...rest: any[]) {
+  if(name==='../../../lib/server-trendline-entries')return {loadTrendEntries:async()=>{trendReads++;return {version:'trendline-pilot-v1',rows:[],missing:[]};}};
   if(name==='../../../lib/server-gap-context')return {loadGapContexts:async()=>{gapReads++;return {version:'weekly-gap-context-v1',rows:[],missing:[]};}};
   if(name==='../../../lib/server-prices')return {loadPriceBars:async()=>[],loadWeeklyGapBars:async()=>[],savePriceBars:async()=>({confirmed:1})};
   if (name === 'next/headers') return { headers: async () => requestHeaders };
@@ -160,4 +161,13 @@ test('entry context is authenticated, same-origin, bounded and read only',async(
  assert.equal((await route.POST(request('https://journal.example',' '.repeat(10001)))).status,413);assert.equal(gapReads,before);
  assert.equal((await route.GET(new Request('https://journal.example/api/gap-context'))).status,404);assert.equal(gapReads,before);
  assert.equal((await route.POST(request())).status,200);assert.equal(gapReads,before+1);
+});
+
+test('trendline pilot reads require native sign-in, same-origin and bounded UTF-8 request bodies',async()=>{
+  const request=(body:string,origin='https://journal.example')=>new Request('https://journal.example/api/trendline-entries',{method:'POST',headers:{Origin:origin},body});
+  requestHeaders=new Headers();assert.equal((await route.POST(request('{}'))).status,401);assert.equal(trendReads,0);
+  requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});
+  assert.equal((await route.POST(request('{}','https://other.example'))).status,403);assert.equal(trendReads,0);
+  assert.equal((await route.POST(request(JSON.stringify({trades:[],pad:'界'.repeat(6100)})))).status,413);assert.equal(trendReads,0);
+  assert.equal((await route.POST(request('{"trades":[]}'))).status,200);assert.equal(trendReads,1);
 });
