@@ -10,6 +10,7 @@ import {summarizeRealized} from '../../../lib/realized';
 import {loadPriceBars,savePriceBars,loadWeeklyGapBars} from '../../../lib/server-prices';
 import {loadGapContexts} from '../../../lib/server-gap-context';
 import {loadTrendEntries} from '../../../lib/server-trendline-entries';
+import {loadAccountDayBalances} from '../../../lib/server-calendar-accounts';
 
 export const dynamic='force-dynamic';
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
@@ -26,6 +27,7 @@ async function handle(request:Request){
       if(body.action==='bootstrap')return json(await bootstrap(body.offset??0));
       if(body.action==='firm-reference')return json(await saveFirmReference(body.payload??{}));
       if(body.action==='account-profile')return json(await saveProfile(body.payload??{}));
+      if(body.action==='account-day-balances')return json(await loadAccountDayBalances(body.payload??{}));
       if(body.action==='import')return json(await importExecutions(body.payload??{}));
       if(body.action==='firm-payout-import')return json(await importFirmPayouts(body.payload??{}));
       if(body.action==='verify'){
@@ -42,6 +44,10 @@ async function handle(request:Request){
       return json({error:'Unknown maintenance operation.'},400);
     }
     if(!await getChatGPTUser())return json({error:'Sign in with ChatGPT to open your private journal.'},401);
+    if(path==='account-day-balances'&&method==='POST'){
+      const raw=await request.text();if(new TextEncoder().encode(raw).length>90000)return json({error:'Daily balance requests must be under 90 KB.'},413);
+      return json(await loadAccountDayBalances(JSON.parse(raw)));
+    }
     if(path==='trendline-entries'&&method==='POST'){
       const raw=await request.text();if(new TextEncoder().encode(raw).length>18000)return json({error:'Pilot requests must be under 18 KB.'},413);
       return json(await loadTrendEntries((JSON.parse(raw) as {trades:unknown}).trades));
