@@ -18,7 +18,7 @@ function contextLabel(row:GapEntryContext){
   return row.tags.length?row.tags.map(tag=>GAP_CONTEXT_LABELS[tag]).join(' · '):'No recorded match';
 }
 type PilotState={key:string;rows:GapEntryContext[];missing:number;checked:number;busy:boolean;error:string};
-export function GapContextPanel({trades,onTrade}:{trades:Trade[];onTrade:(trade:Trade,pnlMode?:'gross'|'net')=>void}){
+export function GapContextPanel({trades,onTrade,accountStages}:{trades:Trade[];onTrade:(trade:Trade,pnlMode?:'gross'|'net')=>void;accountStages?:ReadonlyMap<string,string>}){
   const {priceRevision}=useRecorder(),[refresh,setRefresh]=useState(0),[limit,setLimit]=useState(8);
   const selected=useMemo(()=>trades.filter(t=>/^(NQ|MNQ|ES|MES) 20\d{2}-(0[1-9]|1[0-2])$/.test(t.contract)&&Date.parse(t.entry)>=Date.UTC(2026,0,1)).sort((a,b)=>Date.parse(b.entry)-Date.parse(a.entry)||b.exitOrder-a.exitOrder||a.id.localeCompare(b.id)).slice(0,GAP_CONTEXT_SAMPLE),[trades]);
   // Stable across heartbeat-only journal refreshes; genuine trade corrections
@@ -81,7 +81,7 @@ export function GapContextPanel({trades,onTrade}:{trades:Trade[];onTrade:(trade:
         <div className="table-scroll"><table className="gap-context-table"><thead><tr><th>Contract / account</th><th>First entry <small>CT</small></th><th>Recorded context</th><th>Nearest recorded level</th><th className="right">Distance</th><th className="right">Weeks available</th><th className="right">Net · model</th><th/></tr></thead><tbody>{ordered.slice(0,limit).map(row=>{
           const trade=tradeMap.get(JSON.stringify([row.account,row.id]));
           return <tr key={row.account+'|'+row.id} tabIndex={trade?0:undefined} onClick={()=>{if(trade)onTrade(trade,'net');}} onKeyDown={e=>{if(trade&&(e.key==='Enter'||e.key===' ')){e.preventDefault();onTrade(trade,'net');}}}>
-            <td><strong>{row.contract}</strong><span className={'direction '+trade?.dir.toLowerCase()}>{trade?.dir}</span><small className="block account-text" title={row.account}>{accountDisplayName(row.account)}</small></td>
+            <td><strong>{row.contract}</strong><span className={'direction '+trade?.dir.toLowerCase()}>{trade?.dir}</span><small className="block account-text" title={row.account}>{accountDisplayName(row.account,undefined,accountStages?.get(row.account))}</small></td>
             <td>{dateLabel(centralDay(row.entry),true)}<small className="block muted">{timeLabel(row.entry)}</small><small className="block muted">{row.entryPrice===null?'Unknown first price':point(row.entryPrice)}</small></td>
             <td className="gap-context-label">{contextLabel(row)}</td>
             <td>{row.nearest?point(row.nearest.price):'—'}{row.nearest&&<small className="block muted">{dateLabel(row.nearest.sunday,true)} · {row.nearest.kind}</small>}</td>

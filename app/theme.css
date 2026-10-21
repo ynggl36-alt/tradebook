@@ -430,3 +430,8 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
  .pattern-scope-toolbar .segmented button { font-size:10px; }
  .archive-advanced-note { padding:0 18px 18px; }
 }
+
+/* One account-stage selection for performance views. */
+.stage-filter { flex-shrink:0; }
+.stage-filter>button { min-height:29px; font-size:11px; }
+.performance-stage-note { margin:-8px 0 18px; font-size:11px; line-height:1.7; color:var(--muted); }
