@@ -29,7 +29,7 @@ export async function loadTrendEntries(input:unknown):Promise<TrendEntriesRespon
   for(const ref of refs){
     const history=histories.get(ref.account),trade=history?.trades.find(t=>t.id===ref.id&&t.account===ref.account);
     if(!trade||!history||!inTrendPilot(trade.entry)||!/^(NQ|MNQ|ES|MES) 20\d{2}-(0[1-9]|1[0-2])$/.test(trade.contract)){missing.push(ref);continue;}
-    rows.push({id:trade.id,account:trade.account,contract:trade.contract,entry:trade.entry,entryPrice:firstEntryFill(trade,history.fills)?.price??null,gross:trade.pnl,net:netTradePnl(trade)});
+    rows.push({id:trade.id,account:trade.account,contract:trade.contract,entry:trade.entry,dir:trade.dir,entryPrice:firstEntryFill(trade,history.fills)?.price??null,gross:trade.pnl,net:netTradePnl(trade)});
   }
   return {version:TREND_VERSION,rows,missing};
 }

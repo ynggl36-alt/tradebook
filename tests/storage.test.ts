@@ -360,7 +360,7 @@ test('trendline entry lookup is canonical, bounded and read-only across 40 accou
     const before=await server.loadJournalVersion(),rowsBefore=sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get();preparedQueries.length=0;
     const report=await trendEntries.loadTrendEntries(refs);const queries=[...preparedQueries];
     assert.equal(report.rows.length,39);assert.equal(report.missing.length,1);assert.equal(report.rows.find(r=>r.account===accounts[0])!.entryPrice,null);
-    assert.equal(report.rows.find(r=>r.account===accounts[2])!.entryPrice,100);assert.equal(queries.length,10);assert.ok(queries.every(q=>q.startsWith('SELECT account,data')));
+    assert.equal(report.rows.find(r=>r.account===accounts[2])!.entryPrice,100);assert.equal(report.rows.find(r=>r.account===accounts[2])!.dir,'Long');assert.equal(queries.length,10);assert.ok(queries.every(q=>q.startsWith('SELECT account,data')));
     assert.deepEqual(await server.loadJournalVersion(),before);assert.deepEqual(sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get(),rowsBefore);
     await assert.rejects(()=>trendEntries.loadTrendEntries([...refs,refs[0]]),/1 to 40/);
     await assert.rejects(()=>trendEntries.loadTrendEntries([refs[0],refs[0]]),/repeated/);

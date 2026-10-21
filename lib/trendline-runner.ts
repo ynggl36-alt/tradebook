@@ -1,3 +1,4 @@
+import {attributeTrendEntry} from './trendline-attribution';
 import type {PriceBar} from './recorder';
 import {measureTrendEntry,observePairReaction,prepareTrends,scanTrends,summarizeReactions} from './trendlines';
 import type {ReactionCheck,ReactionSummary,TrendEntry,TrendEntryResult,TrendSnapshot} from './trendlines';
@@ -17,7 +18,7 @@ export async function runTrendJob(job:TrendJob,progress:(checked:number,total:nu
         if(!observations.has(pair.id))observations.set(pair.id,observePairReaction(source,pair));
       }
     }
-    rows.push(measureTrendEntry(entry,snapshot));if(job.chart)chart=snapshot;
+    const row=measureTrendEntry(entry,snapshot);row.attribution=attributeTrendEntry(entry,snapshot,source);rows.push(row);if(job.chart)chart=snapshot;
     if(i%4===0||i===job.entries.length-1){progress(i+1,job.entries.length);await new Promise<void>(resolve=>setTimeout(resolve,0));}
   }
   return {rows,reactions:summarizeReactions([...observations.values()]),snapshots:cache.size,families:observations.size,...(chart?{chart}:{})};
