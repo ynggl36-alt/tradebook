@@ -4,6 +4,7 @@ import {mergePriceBars,PRICE_RANGE_LIMIT} from '../lib/price-history';
 import type {PriceBar} from '../lib/recorder';
 import type {TrendJob,TrendJobResult} from '../lib/trendline-runner';
 import {waitForTrendWorker} from '../lib/trendline-task';
+import TrendlineWorker from './trendline-worker?worker';
 export async function loadTrendPrices(contract:string,start:number,end:number,signal:AbortSignal):Promise<{bars:PriceBar[];warning:string}>{
   const cloud:PriceBar[]=[];let warning='';
   for(let from=start;from<=end;from+=PRICE_RANGE_LIMIT){
@@ -19,6 +20,6 @@ export async function loadTrendPrices(contract:string,start:number,end:number,si
 export function calculateTrends(job:TrendJob,signal:AbortSignal,progress:(checked:number,total:number)=>void=()=>{}):Promise<TrendJobResult>{
   if(signal.aborted)return Promise.reject(new Error('Cancelled'));
   let worker:Worker;
-  try{worker=new Worker(new URL('./trendline-worker.ts',import.meta.url),{type:'module'});}catch{return Promise.reject(new Error('Background analysis could not start. Refresh the page to retry.'));}
+  try{worker=new TrendlineWorker();}catch{return Promise.reject(new Error('Background analysis could not start. Refresh the page to retry.'));}
   return waitForTrendWorker(worker,job,signal,progress);
 }
