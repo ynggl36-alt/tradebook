@@ -1,5 +1,6 @@
 import type {PriceBar} from './recorder';
 import {centralDay} from './analytics';
+import type {TrendAttribution} from './trendline-attribution';
 
 // Fixed before inspecting trading outcomes. This version is deliberately a
 // continuous-session pilot: missing minutes and market closures split geometry.
@@ -19,8 +20,8 @@ export type TrendAnchor={time:number;price:number;edge:Edge;impulse:boolean;avai
 export type TrendLine={id:string;family:string;minutes:number;polarity:Polarity;style:TrendStyle;a:TrendAnchor;b:TrendAnchor;availableAt:number;asOf:number;value:number;slope:number;touches:number;wickTouches:number;bodyTouches:number;broken:boolean;score:number;segmentStart:number;segmentEnd:number};
 export type PairCheck={id:string;impulse:boolean;wick:TrendLine;body:TrendLine;bothEligible:boolean};
 export type TrendSnapshot={version:string;contract:string;asOf:number;status:'measured'|'insufficient-prices';atr:number|null;tolerance:number|null;minutesCovered:number;segmentStart:number|null;anchors:number;pairs:number;variants:number;intact:number;confirmed:number;truncated:boolean;lines:TrendLine[]};
-export type TrendEntry={id:string;account:string;contract:string;entry:string;entryPrice:number|null;gross:number;net:number|null};
-export type TrendEntryResult=TrendEntry&{status:'measured'|'insufficient-prices'|'missing-entry-fill';group:'body-only'|'wick-only'|'both'|'neither'|'unknown';mixed:boolean;impulse:boolean;confirmedNear:number;candidateNear:number;nearest:number|null;lineIds:string[];snapshot:Omit<TrendSnapshot,'lines'>};
+export type TrendEntry={id:string;account:string;contract:string;entry:string;entryPrice:number|null;gross:number;net:number|null;dir?:'Long'|'Short'};
+export type TrendEntryResult=TrendEntry&{attribution?:TrendAttribution;status:'measured'|'insufficient-prices'|'missing-entry-fill';group:'body-only'|'wick-only'|'both'|'neither'|'unknown';mixed:boolean;impulse:boolean;confirmedNear:number;candidateNear:number;nearest:number|null;lineIds:string[];snapshot:Omit<TrendSnapshot,'lines'>};
 export type ReactionCheck={id:string;impulse:boolean;status:'complete'|'incomplete'|'baseline-ineligible';body:boolean;wick:boolean;end:number};
 export type ReactionSummary={complete:number;incomplete:number;baselineIneligible:number;bodyOnly:number;wickOnly:number;both:number;neither:number;impulse:{complete:number;bodyOnly:number;wickOnly:number;both:number;neither:number}};
 const MINUTE=60000,MAX_ANCHORS=28,MAX_PAIRS=160,RIGHT=2,LEFT=2;
