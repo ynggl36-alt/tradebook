@@ -16,12 +16,14 @@ class Statement{
  async all(){return {success:true,results:sqlite.prepare(this.sql).all(...this.values),meta:{changes:0}};}
  async run(){const result=sqlite.prepare(this.sql).run(...this.values);return {success:true,meta:{changes:Number(result.changes)}};}
 }
-const database={prepare:(sql:string)=>new Statement(sql),batch:async(statements:Statement[])=>{sqlite.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
+const preparedQueries:string[]=[];
+const database={prepare:(sql:string)=>{preparedQueries.push(sql);return new Statement(sql);},batch:async(statements:Statement[])=>{sqlite.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
 const syntheticSeed=JSON.parse(fs.readFileSync('tests/fixtures/synthetic-history.json','utf8'));
 const originalLoad=(Module as any)._load;
 (Module as any)._load=function(name:string,...rest:any[]){if(name.endsWith('/data/initial-history.json'))return syntheticSeed;if(name==='cloudflare:workers')return {env:{DB:database}};return originalLoad.call(this,name,...rest);};
 const server=require('../lib/server-journal')as typeof import('../lib/server-journal');
 const prices=require('../lib/server-prices')as typeof import('../lib/server-prices');
+const gapContext=require('../lib/server-gap-context')as typeof import('../lib/server-gap-context');
 
 test('journal revision checks observe changes and partial-exit reports preserve original completed trades',async()=>{
  let offset=0,ready=false;while(!ready){const result=await server.bootstrap(offset);offset=result.next;ready=result.ready;}
@@ -313,4 +315,32 @@ test('weekly-gap reads select only exact boundary minutes without mutating candl
  assert.equal((await prices.loadPriceBars('NQ 2026-12',Date.parse('2026-10-16T20:58:00Z'),Date.parse('2026-10-18T22:01:00Z'))).length,4);
  assert.deepEqual(await server.loadJournal(),before);assert.deepEqual(await server.loadJournalVersion(),version);
  sqlite.exec('DELETE FROM price_bars');
+});
+test('entry-context batches use canonical first fills, are bounded, and do not mutate any stored records',async()=>{
+ const contract='NQ 2026-12',entry='2026-10-20T15:00:30.123456Z',minute=Date.parse('2026-10-20T15:00:00Z');
+ const candle=(start:number,open=112)=>({id:contract+'|'+start,contract,start,end:start+60000,open,high:open+1,low:open-1,close:open,volume:10,capturedAt:minute+60000});
+ const source=[candle(Date.parse('2026-10-16T20:59:00Z'),100),candle(Date.parse('2026-10-18T22:00:00Z'),110),...Array.from({length:20},(_,i)=>candle(minute-(20-i)*60000))];
+ await prices.savePriceBars(source);
+ const refs:{account:string;id:string}[]=[];
+ for(let i=0;i<20;i++){
+   const account='LFF-GAP-SYNTHETIC-'+i;
+   const fills:Fill[]=[{id:'entry-'+i,contract,symbol:'NQ',pv:20,time:entry,ordinal:1,side:'Buy',qty:1,price:111,pos:1},{id:'exit-'+i,contract,symbol:'NQ',pv:20,time:'2026-10-20T15:02:00Z',ordinal:2,side:'Sell',qty:1,price:112,pos:0}];
+   const history=await reconstruct(account,fills);refs.push({account,id:history.trades[0].id});
+   sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,\'[]\',\'{}\',1,?)').run(account,JSON.stringify(history),entry);
+ }
+ const snapshot=()=>sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>({table:row.name,rows:sqlite.prepare('SELECT * FROM "'+row.name+'" ORDER BY rowid').all()}));
+ const before=snapshot(),start=preparedQueries.length;
+ try{
+   const result=await gapContext.loadGapContexts(refs.map(ref=>({...ref,pnl:999999,contract:'MES 2027-03',entryPrice:1})));
+   assert.equal(result.rows.length,20);assert.equal(result.missing.length,0);assert.equal(preparedQueries.length-start,45);assert.ok(preparedQueries.slice(start).every(sql=>/^SELECT\b/.test(sql)));
+   for(const row of result.rows){assert.equal(row.entryPrice,111);assert.equal(row.contract,contract);assert.equal(row.gross,20);assert.equal(row.net,16.5);assert.deepEqual(row.tags,['near-edge']);assert.equal(row.unavailableWeeks,row.checkedWeeks-1);}
+   assert.deepEqual(snapshot(),before);
+   const changed=await gapContext.loadGapContexts([{account:'UNKNOWN-SYNTHETIC',id:refs[0].id},refs[1]]);assert.deepEqual(changed.missing,[{account:'UNKNOWN-SYNTHETIC',id:refs[0].id}]);assert.equal(changed.rows.length,1);assert.equal(changed.rows[0].account,refs[1].account);
+   const queries=preparedQueries.length;
+   for(const input of [[],[...refs,refs[0]],[refs[0],refs[0]],[{account:'',id:'x'}],[null]])await assert.rejects(()=>gapContext.loadGapContexts(input));
+   assert.equal(preparedQueries.length,queries);assert.deepEqual(snapshot(),before);
+ }finally{
+   for(const ref of refs)sqlite.prepare('DELETE FROM account_history WHERE account=?').run(ref.account);
+   sqlite.exec('DELETE FROM price_bars');
+ }
 });

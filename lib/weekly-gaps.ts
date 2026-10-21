@@ -10,19 +10,24 @@ export type WeeklyGapContext={gaps:WeeklyGap[];checkedWeeks:number;unavailable:n
 // Regular CME equity-index weekend boundaries. Require those exact one-minute
 // candles: holiday/early closes and missing history remain unavailable.
 // https://www.cmegroup.com/articles/faqs/micro-e-mini-equity-index-futures-frequently-asked-questions.html
+const boundaryCache=new Map<string,WeeklyBoundary[]>();
 export function weeklyBoundaries(asOf:number):WeeklyBoundary[]{
   if(!Number.isSafeInteger(asOf))throw new Error('Invalid weekly-gap time.');
-  const today=centralDay(new Date(asOf).toISOString()),result:WeeklyBoundary[]=[];
+  const today=centralDay(new Date(asOf).toISOString()),cached=boundaryCache.get(today);
+  if(cached)return cached.filter(b=>b.sundayOpenAt+60000<=asOf).map(b=>({...b}));
+  const result:WeeklyBoundary[]=[];
   for(let offset=WEEKLY_GAP_LOOKBACK_DAYS;offset>=0;offset--){
     const sunday=addDays(today,-offset);
     if(new Date(sunday+'T12:00:00Z').getUTCDay()!==0)continue;
     const sundayOpenAt=Date.parse(parseTimestamp(sunday+' 17:00:00','America/Chicago'));
     // The opening minute must have completed before the trade being reviewed.
-    if(sundayOpenAt+60000>asOf)continue;
+    // Cache the calendar independently of the exact entry minute.
     const fridayCloseAt=Date.parse(parseTimestamp(addDays(sunday,-2)+' 16:00:00','America/Chicago'));
     result.push({sunday,fridayCloseAt,sundayOpenAt});
   }
-  return result;
+  if(boundaryCache.size>=128)boundaryCache.delete(boundaryCache.keys().next().value!);
+  boundaryCache.set(today,result);
+  return result.filter(b=>b.sundayOpenAt+60000<=asOf).map(b=>({...b}));
 }
 export function weeklyBoundaryStarts(asOf:number){return weeklyBoundaries(asOf).flatMap(b=>[b.fridayCloseAt-60000,b.sundayOpenAt]);}
 export function weeklyGapContext(contract:string,asOf:number,input:PriceBar[]):WeeklyGapContext{
