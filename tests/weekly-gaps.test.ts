@@ -44,3 +44,9 @@ test('newer boundary corrections win without mutating inputs or rounding half-ti
   assert.equal(result.gaps[0].midpoint,97.625);assert.deepEqual(source,original);
   assert.ok(result.checkedWeeks<=6);
 });
+test('calendar caching never exposes a future Sunday opening or mutable shared boundaries',()=>{
+  const complete=weeklyBoundaries(boundary.sundayOpenAt+60000),found=complete.find(b=>b.sunday===boundary.sunday)!;
+  found.sundayOpenAt=0;complete.length=0;
+  const earlier=weeklyBoundaries(boundary.sundayOpenAt+59999);assert.equal(earlier.some(b=>b.sunday===boundary.sunday),false);
+  const reread=weeklyBoundaries(boundary.sundayOpenAt+60000);assert.equal(reread.find(b=>b.sunday===boundary.sunday)!.sundayOpenAt,boundary.sundayOpenAt);
+});

@@ -4,10 +4,11 @@ import Module from 'node:module';
 
 let requestHeaders = new Headers();
 let journalReads = 0;
-let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0;
+let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0,gapReads=0;
 const importedPayloads:Record<string,unknown>[]=[];
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function(name: string, ...rest: any[]) {
+  if(name==='../../../lib/server-gap-context')return {loadGapContexts:async()=>{gapReads++;return {version:'weekly-gap-context-v1',rows:[],missing:[]};}};
   if(name==='../../../lib/server-prices')return {loadPriceBars:async()=>[],loadWeeklyGapBars:async()=>[],savePriceBars:async()=>({confirmed:1})};
   if (name === 'next/headers') return { headers: async () => requestHeaders };
   if (name === 'next/navigation') return { redirect: (location: string) => { throw new Error('REDIRECT ' + location); } };
@@ -149,4 +150,14 @@ test('weekly-gap boundary reads require native journal sign-in',async()=>{
  const request=new Request('https://journal.example/api/weekly-gap-bars?contract=NQ%202026-12&asOf=1792500000000');
  requestHeaders=new Headers();assert.equal((await route.GET(request)).status,401);
  requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});assert.equal((await route.GET(request)).status,200);
+});
+test('entry context is authenticated, same-origin, bounded and read only',async()=>{
+ const request=(origin='https://journal.example',body='{"trades":[]}')=>new Request('https://journal.example/api/gap-context',{method:'POST',headers:{Origin:origin},body});
+ const before=gapReads;
+ requestHeaders=new Headers();assert.equal((await route.POST(request())).status,401);assert.equal(gapReads,before);
+ requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});
+ assert.equal((await route.POST(request('https://other.example'))).status,403);assert.equal(gapReads,before);
+ assert.equal((await route.POST(request('https://journal.example',' '.repeat(10001)))).status,413);assert.equal(gapReads,before);
+ assert.equal((await route.GET(new Request('https://journal.example/api/gap-context'))).status,404);assert.equal(gapReads,before);
+ assert.equal((await route.POST(request())).status,200);assert.equal(gapReads,before+1);
 });
