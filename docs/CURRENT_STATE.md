@@ -5,6 +5,7 @@
 - Initial shared source prepared on 2026-10-19 from the owner's working Tradebook Site.
 - Five primary sections: Accounts, Calendar, Analysis, Payouts & costs, Settings.
 - Native balances and P&L remain prominent. Dated firm figures and execution-derived estimates remain separately labeled.
+- Analysis Overview/Entries, Calendar and Accounts Archive share a Both / Funded / Evaluations control. The same stage scope filters completed trades, realized calendar/session rows, the account menu and archive rows, and Calendar's native-account comparison. Both preserves the previous combined view including unknown stages; a small notice reports unclassified accounts. Stage selection remains across performance tabs, while Current Accounts and Payouts & costs use Both without a hidden stage filter. An incompatible individual account resets to the selected group. Existing profile > firm stage > recognized Lucid Flex naming precedence is retained using full-source metadata, including native-only accounts. Account status, P&L and later upgrade labels never reconstruct a historical phase or relabel old fills.
 - Accounts use compact, responsive cards with five per row at desktop widths of 1440px and above. Funded, evaluation and unclassified accounts have separate sections. Funded sorting uses known qualifying days remaining, not a claim of payout eligibility; unknown cycles follow known progress. Evaluations sort by consistency-adjusted profit remaining, with unconfirmed targets last. Archived labels remain excluded by default.
 - FIFO realized accounting includes partial exits, per-fill fees, session grouping and checkpoint uncertainty.
 - Immutable account observations support conservative balance-adjustment detection, payout overlap checks and owner classification.
@@ -26,6 +27,8 @@
 - Neither session has an exclusive GitHub identity when both use the owner's connected account. No automatic deployment or protected-branch enforcement is assumed.
 
 ## Work queue
+
+Owner task (2026-10-21), branch `agent/owner/stage-filter-20261021`: filter existing performance analytics by account stage. Owns the performance-scope helper/tests, stage control, Dashboard/filter plumbing, Calendar native-comparison scope, the account selector's All label, matching archive subtitles, scoped styles, test registration and this document. No competing PR at task start. No recorder, schema, accounting, persisted profile, cash or raw-history changes. Unclassified historical accounts remain included only in Both until their stage is established; the daily-loss-limit replay remains separate work.
 
 Owner task (2026-10-21), branch `agent/owner/unified-payouts-20261021`: unify automatic payouts with the main payout list and totals after owner feedback that the separate estimates panel obscures ordinary payouts. Owns `app/cash-view.tsx`, the account payout summaries, scoped styles, `lib/cash-ledger.ts`, the shared unrecorded-payout selector, synthetic ledger regressions, test-runner registration and this document. No competing PR at task start. Detection thresholds, raw data, persisted cash records, account cycle logic, recorder and schema remain unchanged.
 
