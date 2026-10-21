@@ -26,6 +26,7 @@ function JournalDashboard(){
  const [refreshing,setRefreshing]=useState(false),[lastManualCheck,setLastManualCheck]=useState(0),[updateError,setUpdateError]=useState('');
  const [sourceJournal,setSourceJournal]=useState<Journal|null>(null),[error,setError]=useState(''),[progress,setProgress]=useState('Opening your 2026 journal…'),[view,setView]=useState<View>('accounts');
  const journal=useMemo(()=>sourceJournal?journalForYear(sourceJournal):null,[sourceJournal]);
+ const pendingBalanceChanges=sourceJournal?.adjustments?.some(row=>!row.settled)??false;
  const [period,setPeriod]=useState('all'),[account,setAccount]=useState('all'),[symbol,setSymbol]=useState('all'),[chartMode,setChartMode]=useState('cumulative'),[stage,setStage]=useState<PerformanceStage>('all');
  const [activeTrade,setActiveTrade]=useState<{trade:Trade;pnlMode:'gross'|'net'}|null>(null),[activeAccount,setActiveAccount]=useState<{account:string;scope?:AccountScope;pnlMode:'gross'|'net'}|null>(null),[cashEdit,setCashEdit]=useState<CostRecord|null>(null),[toast,setToast]=useState(''),[busy,setBusy]=useState(false);
  const loaded=useRef(false),journalRequest=useRef(0);
@@ -48,12 +49,12 @@ function JournalDashboard(){
    const interval=document.visibilityState==='visible'?60000:120000;
    if(checking||Date.now()-lastCheck<interval)return;checking=true;lastCheck=Date.now();
    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
-   try{const response=await fetch('/api/journal-version',{cache:'no-store',signal:controller.signal}),data=await response.json()as {revision?:string;error?:string};if(!response.ok||!data.revision)throw new Error(data.error||'Background updates are delayed.');if(!cancelled){if(data.revision!==sourceJournal.revision)await refresh();setUpdateError('');}}
+   try{const response=await fetch('/api/journal-version',{cache:'no-store',signal:controller.signal}),data=await response.json()as {revision?:string;error?:string};if(!response.ok||!data.revision)throw new Error(data.error||'Background updates are delayed.');if(!cancelled){if(data.revision!==sourceJournal.revision||pendingBalanceChanges)await refresh();setUpdateError('');}}
    catch(e){if(!cancelled)setUpdateError(e instanceof Error?e.message:String(e));}finally{clearTimeout(timeout);checking=false;}
   };
   const timer=setInterval(()=>void check(),30000),focus=()=>{if(document.visibilityState==='visible')void check();};window.addEventListener('focus',focus);document.addEventListener('visibilitychange',focus);
   return()=>{cancelled=true;clearInterval(timer);window.removeEventListener('focus',focus);document.removeEventListener('visibilitychange',focus);};
- },[sourceJournal?.revision]);
+ },[sourceJournal?.revision,pendingBalanceChanges]);
  useEffect(()=>{if(!cloudRevision)return;let cancelled=false;refresh().then(()=>{if(!cancelled)setToast('New recorder executions saved to your journal');}).catch(e=>{if(!cancelled)setToast('Executions saved; refresh the journal to update this view. '+e.message);});return()=>{cancelled=true;};},[cloudRevision]);
  useEffect(()=>{if(loaded.current)return;loaded.current=true;const request=++journalRequest.current;(async()=>{try{let j=await api('journal');if(!j.ready){let offset=0,ready=false;while(!ready){const result=await api('bootstrap',{offset});offset=result.next;ready=result.ready;setProgress('Bringing across your history · '+Math.round(offset/result.total*100)+'%');}j=await api('journal');}if(request===journalRequest.current)setSourceJournal(j);}catch(e){setError(e instanceof Error?e.message:String(e));}})();},[]);
  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),4500);return()=>clearTimeout(t);},[toast]);

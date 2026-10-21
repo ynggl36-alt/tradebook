@@ -24,3 +24,13 @@ test('a matching deduction does not repeat a historical payout in other balance 
  const data=journal();data.adjustments![0]={...data.adjustments![0],payoutId:'historical',possiblePayoutIds:['historical']};
  const html=render(data);assert.equal((html.match(/data-transaction-kind="payout"/g)||[]).length,1);assert.doesNotMatch(html,/Other balance changes/);assert.match(html,/1 payout/);
 });
+test('an incoming deduction settles in the background and then becomes one normal payout',()=>{
+ const data=journal();data.adjustments![0]={...data.adjustments![0],settled:false,reasons:['Waiting briefly for execution uploads to settle.']};
+ const pending=render(data);assert.equal((pending.match(/data-transaction-kind="payout"/g)||[]).length,1);assert.match(pending,/\$1,234\.56/);assert.doesNotMatch(pending,/Other balance changes|Provisional|Waiting briefly|Reasons &amp; classification|\$2,000\.00/);
+ data.adjustments![0]={...data.adjustments![0],settled:true,reasons:[]};
+ const settled=render(data);assert.equal((settled.match(/data-transaction-kind="payout"/g)||[]).length,2);assert.match(settled,/\$3,234\.56/);assert.match(settled,/2 payouts/);assert.doesNotMatch(settled,/Other balance changes|Provisional/);
+});
+test('settled missing coverage, firm removals and possible saved-payout overlaps remain reviewable without adding payouts',()=>{
+ const data=journal(),base=data.adjustments![0];data.adjustments=[{...base,id:'missing-coverage',amount:null,tradingNet:null,kind:'unexplained',reasons:['Missing trading results']},{...base,id:'firm-removal',kind:'firm-adjustment',reasons:['Firm profit removal']},{...base,id:'possible-overlap',possiblePayoutIds:['historical'],reasons:['Possible saved payout']}];
+ const html=render(data);assert.equal((html.match(/data-transaction-kind="payout"/g)||[]).length,1);assert.match(html,/\$1,234\.56/);assert.match(html,/Other balance changes/);assert.match(html,/Missing trading results/);assert.match(html,/Firm profit removal/);assert.match(html,/Saved payout overlap/);assert.doesNotMatch(html,/Provisional|Upload state|Uploads settled/);
+});

@@ -351,10 +351,7 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .adjustments-table th { font-size:10px; }
 .adjustments-table>tbody>tr:not(.adjustment-review-row)>td { padding-top:16px; padding-bottom:15px; }
 .adjustments-table td>.account-text { margin-top:6px; }
-.adjustment-state,.adjustment-kind { display:inline-flex; align-items:center; font-size:11px; line-height:1.6; }
-.adjustment-state { padding:4px 7px; border-radius:4px; color:var(--text-secondary); background:var(--surface-soft); }
-.adjustment-state.settled { color:var(--accent-ink); background:var(--accent-bg); }
-.adjustment-state.provisional { color:var(--warning); background:var(--warning-bg); }
+.adjustment-kind { display:inline-flex; align-items:center; font-size:11px; line-height:1.6; }
 .adjustment-kind { font-weight:550; }
 .adjustment-kind.likely-payout,.adjustment-kind.payout { color:var(--accent-ink); }
 .adjustment-review-row>td { padding:0!important; background:var(--surface-soft); white-space:normal; border-bottom:1px solid var(--line); }
