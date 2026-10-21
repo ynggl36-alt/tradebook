@@ -12,6 +12,7 @@
 - Recorder 0.5.0 captures NQ, MNQ, ES and MES fills. Automatic price catch-up is enabled by default and pauses when trading: one provider calendar day per request, one outstanding request, all monitored accounts flat and five minutes without a fill or new account. It discovers exact contracts from available recent fills and retains progress for restart. Continuous price collection remains a separate optional mode.
 - One-minute candles are stored independently in D1 by exact contract and UTC minute, uploaded in retryable 240-row batches. Browser cache v4 queues existing candles gradually and prioritizes current dates; fills and account snapshots take priority. Charts merge cloud and local observations, preserving newer corrections and exposing missing data.
 - Migration `0006_purple_micromax.sql` creates only `price_bars`; no financial records are rewritten. Portable backups include keyset-paged candles. Owner-private maintenance supports a read-only backup action for authorized journal work.
+- Weekly opening gaps use exact-contract one-minute Friday-close/Sunday-open candles, with DST-aware Central-time boundaries and a 35-day lookback before the selected entry. Faint grey zones extend to the final candle in the view, with midpoint guides; later fills/touches do not remove them. Missing regular-session boundaries, including holiday/early-close cases, remain unavailable. This is chart context, not automatic strategy classification.
 - The first GitHub snapshot replaces all owner histories/identifiers with synthetic fixtures and empty deployment defaults. Source-data boundaries differ from the private Site and must be preserved by the release adapter.
 
 ## Ownership
@@ -22,7 +23,7 @@
 
 ## Work queue
 
-Owner task (2026-10-20), branch `agent/owner/price-archive-20261020`: durable one-minute price history, automatic candle upload through the existing folder connection, cloud chart recovery, and bounded idle-only NinjaTrader historical catch-up. Owns the price schema/migration, recorder, browser price queue and chart. Accounting and strategy classification are outside this task. No competing schema PR was open at task start.
+Owner task (2026-10-20), branch `agent/owner/weekly-gap-zones-20261020`: extra lower price-chart padding, explicit weekend separators and faint weekly-gap zones. Owns chart rendering, weekly-gap helper, read-only boundary query, related tests and documentation. No recorder, accounting or schema changes. Strategy classification remains a separate task. No competing PR was open at task start.
 
 ## Limits
 

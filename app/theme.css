@@ -39,6 +39,9 @@
   --chart-up: #2d765b;
   --chart-down: #b2575d;
   --chart-band: #f8efd8;
+  --chart-gap-fill: #858b951c;
+  --chart-gap-edge: #7c859175;
+  --chart-gap-label: #66707c;
   --chart-area: #397c65;
   --chart-loss-bg: #eedbd8;
   --profit-rgb: 54 125 101;
@@ -86,6 +89,9 @@ html[data-theme="dark"] {
   --chart-up: #7bcfad;
   --chart-down: #f0979b;
   --chart-band: #383528;
+  --chart-gap-fill: #b9c0c922;
+  --chart-gap-edge: #a6b0bd75;
+  --chart-gap-label: #aeb8c2;
   --chart-area: #4c9c80;
   --chart-loss-bg: #53363e;
   --profit-rgb: 89 186 145;

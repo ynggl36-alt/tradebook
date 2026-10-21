@@ -7,7 +7,7 @@ import {netTradeSummary} from '../../../lib/trading-costs';
 import {accountStage,flexAccount,flexEvaluation,flexPayoutDays} from '../../../lib/lucid-flex';
 import {payoutSummary,payoutIncomeSummary} from '../../../lib/payouts';
 import {summarizeRealized} from '../../../lib/realized';
-import {loadPriceBars,savePriceBars} from '../../../lib/server-prices';
+import {loadPriceBars,savePriceBars,loadWeeklyGapBars} from '../../../lib/server-prices';
 
 export const dynamic='force-dynamic';
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
@@ -39,6 +39,7 @@ async function handle(request:Request){
       return json({error:'Unknown maintenance operation.'},400);
     }
     if(!await getChatGPTUser())return json({error:'Sign in with ChatGPT to open your private journal.'},401);
+    if(path==='weekly-gap-bars'&&method==='GET')return json({bars:await loadWeeklyGapBars(url.searchParams.get('contract')||'',Number(url.searchParams.get('asOf')))});
     if(path==='prices'&&method==='GET')return json({bars:await loadPriceBars(url.searchParams.get('contract')||'',Number(url.searchParams.get('start')),Number(url.searchParams.get('end')))});
     if(path==='prices'&&method==='POST'){
       const raw=await request.text();if(raw.length>100000)return json({error:'Price batches must be under 100 KB.'},413);

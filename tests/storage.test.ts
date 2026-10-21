@@ -300,3 +300,17 @@ test('durable price batches deduplicate, reject atomic conflicts and preserve al
  const after=await server.loadJournal();assert.deepEqual(after,before);assert.deepEqual(await server.loadJournalVersion(),version);
  sqlite.exec('DELETE FROM price_bars');
 });
+
+
+test('weekly-gap reads select only exact boundary minutes without mutating candle or financial records',async()=>{
+ const before=await server.loadJournal(),version=await server.loadJournalVersion(),asOf=Date.parse('2026-10-20T15:00:00Z');
+ const candle=(time:string,contract='NQ 2026-12')=>{const start=Date.parse(time);return {id:contract+'|'+start,contract,start,end:start+60000,open:100,high:102,low:99,close:101,volume:10,capturedAt:Date.parse('2026-10-20T14:59:00Z')};};
+ const source=[candle('2026-10-16T20:59:00Z'),candle('2026-10-18T22:00:00Z'),candle('2026-10-16T20:58:00Z'),candle('2026-10-18T22:01:00Z'),candle('2026-10-18T22:00:00Z','MNQ 2026-12')];
+ await prices.savePriceBars(source);
+ const rows=await prices.loadWeeklyGapBars('NQ 2026-12',asOf);assert.deepEqual(rows.map(b=>b.start),source.slice(0,2).map(b=>b.start));
+ const historical=await prices.loadWeeklyGapBars('NQ 2026-12',Date.parse('2026-10-16T20:00:00Z'));assert.equal(historical.length,0);
+ await assert.rejects(()=>prices.loadWeeklyGapBars('NQ1!',asOf));await assert.rejects(()=>prices.loadWeeklyGapBars('NQ 2026-12',Date.now()+600000));
+ assert.equal((await prices.loadPriceBars('NQ 2026-12',Date.parse('2026-10-16T20:58:00Z'),Date.parse('2026-10-18T22:01:00Z'))).length,4);
+ assert.deepEqual(await server.loadJournal(),before);assert.deepEqual(await server.loadJournalVersion(),version);
+ sqlite.exec('DELETE FROM price_bars');
+});
