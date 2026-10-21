@@ -25,6 +25,7 @@ async function handle(request:Request){
       if(body.action==='backup')return backupResponse();
       if(body.action==='bootstrap')return json(await bootstrap(body.offset??0));
       if(body.action==='firm-reference')return json(await saveFirmReference(body.payload??{}));
+      if(body.action==='account-profile')return json(await saveProfile(body.payload??{}));
       if(body.action==='import')return json(await importExecutions(body.payload??{}));
       if(body.action==='firm-payout-import')return json(await importFirmPayouts(body.payload??{}));
       if(body.action==='verify'){
