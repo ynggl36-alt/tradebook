@@ -24,6 +24,7 @@ const originalLoad=(Module as any)._load;
 const server=require('../lib/server-journal')as typeof import('../lib/server-journal');
 const prices=require('../lib/server-prices')as typeof import('../lib/server-prices');
 const gapContext=require('../lib/server-gap-context')as typeof import('../lib/server-gap-context');
+const trendEntries=require('../lib/server-trendline-entries')as typeof import('../lib/server-trendline-entries');
 
 test('journal revision checks observe changes and partial-exit reports preserve original completed trades',async()=>{
  let offset=0,ready=false;while(!ready){const result=await server.bootstrap(offset);offset=result.next;ready=result.ready;}
@@ -343,4 +344,26 @@ test('entry-context batches use canonical first fills, are bounded, and do not m
    for(const ref of refs)sqlite.prepare('DELETE FROM account_history WHERE account=?').run(ref.account);
    sqlite.exec('DELETE FROM price_bars');
  }
+});
+
+test('trendline entry lookup is canonical, bounded and read-only across 40 account references',async()=>{
+  const accounts=Array.from({length:40},(_,i)=>'PILOT-SYNTHETIC-'+i),refs:{account:string;id:string}[]=[];
+  try{
+    for(const [i,account] of accounts.entries()){
+      const entry='2026-10-19T15:30:00Z',contract='MNQ 2026-12';
+      const fills:Fill[]=[{id:'entry-'+i,contract,symbol:'MNQ',pv:2,time:entry,ordinal:1,side:'Buy',qty:1,price:100,pos:1},{id:'scale-'+i,contract,symbol:'MNQ',pv:2,time:entry,ordinal:2,side:'Buy',qty:1,price:200,pos:2},{id:'exit-'+i,contract,symbol:'MNQ',pv:2,time:'2026-10-19T15:31:00Z',ordinal:3,side:'Sell',qty:2,price:210,pos:0}];
+      const h:AccountHistory={account,fills,trades:(await reconstruct(account,fills)).trades,issues:[]};refs.push({account,id:h.trades[0].id});
+      if(i===0)h.fills=h.fills.filter(f=>f.id!=='entry-'+i);
+      if(i===1)h.trades[0].entry='2026-10-06T15:30:00Z';
+      sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,?, ?,1,?)').run(account,JSON.stringify(h),JSON.stringify(h.trades),JSON.stringify({account,fills:h.fills.length,issues:[],first:entry,last:entry}),entry);
+    }
+    const before=await server.loadJournalVersion(),rowsBefore=sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get();preparedQueries.length=0;
+    const report=await trendEntries.loadTrendEntries(refs);const queries=[...preparedQueries];
+    assert.equal(report.rows.length,39);assert.equal(report.missing.length,1);assert.equal(report.rows.find(r=>r.account===accounts[0])!.entryPrice,null);
+    assert.equal(report.rows.find(r=>r.account===accounts[2])!.entryPrice,100);assert.equal(queries.length,10);assert.ok(queries.every(q=>q.startsWith('SELECT account,data')));
+    assert.deepEqual(await server.loadJournalVersion(),before);assert.deepEqual(sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get(),rowsBefore);
+    await assert.rejects(()=>trendEntries.loadTrendEntries([...refs,refs[0]]),/1 to 40/);
+    await assert.rejects(()=>trendEntries.loadTrendEntries([refs[0],refs[0]]),/repeated/);
+    await assert.rejects(()=>trendEntries.loadTrendEntries([{account:'',id:'x'}]),/required/);
+  }finally{for(const account of accounts)sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
 });

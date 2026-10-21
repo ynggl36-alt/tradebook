@@ -9,6 +9,7 @@ import {payoutSummary,payoutIncomeSummary} from '../../../lib/payouts';
 import {summarizeRealized} from '../../../lib/realized';
 import {loadPriceBars,savePriceBars,loadWeeklyGapBars} from '../../../lib/server-prices';
 import {loadGapContexts} from '../../../lib/server-gap-context';
+import {loadTrendEntries} from '../../../lib/server-trendline-entries';
 
 export const dynamic='force-dynamic';
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
@@ -40,6 +41,10 @@ async function handle(request:Request){
       return json({error:'Unknown maintenance operation.'},400);
     }
     if(!await getChatGPTUser())return json({error:'Sign in with ChatGPT to open your private journal.'},401);
+    if(path==='trendline-entries'&&method==='POST'){
+      const raw=await request.text();if(new TextEncoder().encode(raw).length>18000)return json({error:'Pilot requests must be under 18 KB.'},413);
+      return json(await loadTrendEntries((JSON.parse(raw) as {trades:unknown}).trades));
+    }
     if(path==='gap-context'&&method==='POST'){
       const raw=await request.text();if(new TextEncoder().encode(raw).length>10000)return json({error:'Context requests must be under 10 KB.'},413);
       return json(await loadGapContexts((JSON.parse(raw) as {trades:unknown}).trades));
