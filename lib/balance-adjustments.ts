@@ -28,6 +28,10 @@ export function balanceIntervals(input:BalanceObservation[]):BalanceInterval[]{
  return [...groups.values()].flatMap(group=>{const points=[...group.values()].sort((a,b)=>a.capturedAt.localeCompare(b.capturedAt));return points.slice(1).map((after,i)=>({before:points[i],after}));});
 }
 function payoutDateMatches(record:CashRecord,from:string,to:string){const day=record.firmPayout?.approvedDate??record.date,start=addDays(centralDay(from),-3),end=record.firmPayout?centralDay(to):addDays(centralDay(to),3);return day>=start&&day<=end;}
+// Recorder pauses are ordinary around EOD payouts. Bridge a bounded pause only
+// for inferred Lucid 50K payouts; missing saved activity remains a caveat, not
+// proof of a cash receipt or of complete activity while the recorder was closed.
+export const PAYOUT_CAPTURE_WINDOW_MS=72*60*60000;
 export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAccount:Map<string,RealizedEvent[]>,cash:CashRecord[],labels:AdjustmentLabel[]=[],now=Date.now(),notices:FirmAdjustmentNotice[]=KNOWN_FIRM_ADJUSTMENTS):BalanceAdjustment[]{
  const overrides=new Map(labels.map(label=>[label.id,label])),rows:BalanceAdjustment[]=[];
  for(const {before,after,gap} of intervals){
@@ -47,11 +51,15 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
   if(!sameProvider)reasons.push('The provider or connection changed or is unknown.');
   const flat=left.positionsAvailable&&right.positionsAvailable&&Date.parse(left.positionsAt||'')===Date.parse(before.capturedAt)&&Date.parse(right.positionsAt||'')===Date.parse(after.capturedAt)&&!left.positions.length&&!right.positions.length;
   if(!flat)reasons.push('Both interval endpoints are not confirmed flat.');
-  if(!before.running||!after.running)reasons.push('A snapshot reported the recorder stopped.');
   if((events||[]).some(event=>Date.parse(event.time)===from||Date.parse(event.time)===to))reasons.push('An execution shares a balance observation timestamp.');
-  if(Date.parse(b.at)-Date.parse(a.at)>20*60000)reasons.push('The capture gap may include unrecorded activity.');
   if(before.origin!=='capture'||after.origin!=='capture')reasons.push('An endpoint is a legacy or synthetic observation.');
-  const safeAccounting=reasons.length===0;
+  const accountingReady=reasons.length===0,cadenceWarnings:string[]=[];
+  if(!before.running||!after.running)cadenceWarnings.push('A snapshot reported the recorder stopped; the estimate uses saved executions and may omit activity during the pause.');
+  if(to-from>20*60000)cadenceWarnings.push('The capture gap may include unrecorded activity; the estimate uses the saved execution history.');
+  const recognizedFunded=/^LFF050\d+$/i.test(after.account),withinWindow=to-from<=PAYOUT_CAPTURE_WINDOW_MS;
+  if(!withinWindow)reasons.push('Balance captures are more than 72 hours apart.');
+  reasons.push(...cadenceWarnings);
+  const inferenceReady=accountingReady&&withinWindow&&(cadenceWarnings.length===0||recognizedFunded);
   const lastReceived=Math.max(Date.parse(b.at),Date.parse(before.receivedAt||a.at),Date.parse(after.receivedAt||b.at)),settled=now-lastReceived>=180000;
   if(!settled)reasons.push('Waiting briefly for execution uploads to settle.');
   const id='adjustment:'+before.id+'>'+after.id,label=overrides.get(id),debit=amount!==null&&amount<0?-amount:null;
@@ -59,9 +67,11 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
   const matches=eligible.filter(record=>payoutProceeds(record).gross!==null&&Math.abs(payoutProceeds(record).gross!-debit!)<.01);
   const possible=eligible.filter(record=>{const value=payoutProceeds(record);return matches.includes(record)||(value.gross===null&&value.expected!==null&&value.split!==null&&Math.abs(value.expected/value.split-debit!)<.02);});
   const incident=notices.find(incident=>incident.accounts.includes(after.account)&&incident.date>=centralDay(a.at)&&incident.date<=centralDay(b.at));
-  const likely=!!debit&&/^LFF050\d+$/i.test(after.account)&&debit>=500&&debit<=2000&&safeAccounting&&settled;
+  const likely=!!debit&&recognizedFunded&&debit>=500&&debit<=2000&&inferenceReady&&settled;
   let kind:AdjustmentKind=amount!==null&&amount>0?'credit':incident?'firm-adjustment':likely?'likely-payout':'unexplained';
-  const linked=matches.length===1&&possible.length===1&&settled&&safeAccounting;
+  // Linking an existing confirmation keeps the stricter cadence requirement.
+  // Paused candidates still exclude possible matches from additional proceeds.
+  const linked=matches.length===1&&possible.length===1&&settled&&accountingReady&&cadenceWarnings.length===0;
   if(linked){kind='payout';}
   else if(possible.length)reasons.push('A recorded payout may explain this change; it is excluded from additional payout estimates.');
   if(label)kind=label.kind;

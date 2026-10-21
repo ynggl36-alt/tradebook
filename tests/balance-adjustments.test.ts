@@ -4,7 +4,7 @@ import type {AccountState} from '../lib/account-state';
 import type {CashRecord} from '../lib/types';
 import type {RealizedEvent} from '../lib/realized';
 import type {BalanceInterval,BalanceObservation} from '../lib/balance-adjustments';
-import {balanceIntervals,deriveBalanceAdjustments,inferredPayoutSummary,KNOWN_FIRM_ADJUSTMENTS,observation} from '../lib/balance-adjustments';
+import {balanceIntervals,deriveBalanceAdjustments,inferredPayoutSummary,KNOWN_FIRM_ADJUSTMENTS,observation,PAYOUT_CAPTURE_WINDOW_MS} from '../lib/balance-adjustments';
 import {payoutIncomeSummary,payoutProceeds} from '../lib/payouts';
 
 const account='LFF05000000000010',base=Date.parse('2026-10-19T15:00:00.000Z');
@@ -128,11 +128,10 @@ test('both known hedging incidents remain firm adjustments with no invented noti
  assert.deepEqual(deriveBalanceAdjustments([],new Map(),[],[],now),[]);
 });
 
-// Every unhealthy interval must fail closed for automatic payout inference,
-// even when its residual debit happens to have an ordinary payout amount.
-test('stopped, legacy, absent and disconnected endpoints cannot count as likely payouts',()=>{
+// Pauses are compatible with estimated payouts; accounting/source problems are
+// still blockers even when the residual is an ordinary payout-sized amount.
+test('legacy, absent and disconnected endpoints cannot count as likely payouts',()=>{
  const first=point(50000,0),last=point(49000,5),pairs:BalanceInterval[]=[
-  {before:{...first,running:false},after:last},{before:first,after:{...last,running:false}},
   {before:{...first,origin:'legacy'},after:last},{before:first,after:{...last,origin:'legacy'}},
   {before:{...first,origin:'not-seen'},after:last},{before:first,after:{...last,origin:'not-seen'}},
   {before:{...first,state:{...first.state,connected:false}},after:last},{before:first,after:{...last,state:{...last.state,connected:false}}},
@@ -140,9 +139,48 @@ test('stopped, legacy, absent and disconnected endpoints cannot count as likely 
  ];
  for(const pair of pairs){const rows=deriveBalanceAdjustments([pair],history(),[],[],now);assert.equal(rows.length,1);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.length);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
 });
-test('a gap longer than twenty minutes cannot count as a likely payout',()=>{
- const rows=deriveBalanceAdjustments([interval(point(50000,0),point(49000,21))],history(),[],[],base+25*60000);
- assert.equal(rows.length,1);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
+test('ordinary pauses and overnight captures infer a payout without inventing a recorded receipt',()=>{
+ for(const minutes of [5,21,102,16*60,PAYOUT_CAPTURE_WINDOW_MS/60000])for(const stopped of ['before','after','both','neither']){
+  const first=point(55000,0),last=point(53000,minutes);if(stopped==='before'||stopped==='both')first.running=false;if(stopped==='after'||stopped==='both')last.running=false;
+  const pair=interval(first,last),cash:CashRecord[]=[],snapshot=JSON.stringify([pair,cash]),rows=deriveBalanceAdjustments([pair],history(),cash,[],base+(minutes+4)*60000);
+  assert.equal(rows.length,1);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].amount,-2000);assert.equal(rows[0].expectedShare,1800);assert.equal(rows[0].source,'automatic-estimate');assert.equal(rows[0].settled,true);assert.equal(rows[0].payoutId,undefined);
+  assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:2000,expected:1800});assert.deepEqual(payoutIncomeSummary(cash),{count:0,gross:null,expected:null,actual:null,estimatedCount:0});assert.equal(JSON.stringify([pair,cash]),snapshot);
+  if(stopped!=='neither')assert.ok(rows[0].reasons.some(reason=>reason.includes('stopped')));if(minutes>20)assert.ok(rows[0].reasons.some(reason=>reason.includes('unrecorded activity')));
+ }
+});
+test('pauses still subtract saved trading activity and wait for the latest upload to settle',()=>{
+ const pair=interval({...point(55000,0),running:false,receivedAt:time(105)},{...point(53250,102),receivedAt:time(106)}),events=history([event(250,50)]);
+ const pending=deriveBalanceAdjustments([pair],events,[],[],base+108*60000);assert.equal(pending[0].amount,-2000);assert.equal(pending[0].settled,false);assert.deepEqual(inferredPayoutSummary(pending),noProceeds);
+ const rows=deriveBalanceAdjustments([pair],events,[],[],base+109*60000);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].tradingNet,250);assert.equal(rows[0].expectedShare,1800);
+ const withLoss=deriveBalanceAdjustments([interval({...point(55000,0),running:false},point(52750,102))],history([event(-250,50)]),[],[],base+110*60000);assert.equal(withLoss[0].tradingNet,-250);assert.equal(withLoss[0].amount,-2000);assert.equal(withLoss[0].expectedShare,1800);
+ const explained=deriveBalanceAdjustments([interval({...point(55000,0),running:false},point(53000,102))],history([event(-2000,50)]),[],[],base+110*60000);assert.deepEqual(explained,[]);
+});
+test('more than 72 hours between cash observations cannot automatically infer or link a payout',()=>{
+ const minutes=(PAYOUT_CAPTURE_WINDOW_MS+1)/60000,pair=interval(point(55000,0),point(53000,minutes));
+ for(const cash of [[],[cashRecord({deduction:2000})]]){
+  const rows=deriveBalanceAdjustments([pair],history(),cash,[],base+(minutes+4)*60000);assert.equal(rows.length,1);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].payoutId,undefined);assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.some(reason=>reason.includes('72 hours')));assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
+ }
+});
+test('paused estimates preserve accounting blockers, product scope and payout amount limits',()=>{
+ const first={...point(55000,0),running:false},last=point(53000,102),check=base+110*60000;
+ for(const pair of [interval(first,{...last,state:{...last.state,provider:'Changed'}}),interval(first,{...last,state:{...last.state,positionsAvailable:false}}),{...interval(first,last),gap:true},interval({...first,origin:'legacy'},last)]){
+  const rows=deriveBalanceAdjustments([pair],history(),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
+ }
+ for(const events of [new Map<string,RealizedEvent[]>(),history([event(null,50)]),history([{...event(0,50),net:null,coverageIssues:1}])]){
+  const rows=deriveBalanceAdjustments([interval(first,last)],events,[],[],check);assert.equal(rows[0].amount,null);assert.equal(rows[0].kind,'unexplained');assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
+ }
+ for(const name of ['LFE05000000000010','OTHER00000000010']){
+  const rows=deriveBalanceAdjustments([interval({...point(55000,0,name),running:false},point(53000,102,name))],history([],name),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);
+ }
+ for(const debit of [499.99,2000.01]){const rows=deriveBalanceAdjustments([interval(first,point(55000-debit,102))],history(),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);}
+});
+test('paused estimates keep recorded payouts, firm removals and owner corrections out of additional proceeds',()=>{
+ const pair=interval({...point(55000,0),running:false},point(53000,102)),record=cashRecord({deduction:2000,received:1800}),check=base+110*60000;
+ const linked=deriveBalanceAdjustments([pair],history(),[record],[],check);assert.equal(linked[0].payoutId,undefined);assert.deepEqual(linked[0].possiblePayoutIds,[record.id]);assert.deepEqual(inferredPayoutSummary(linked),noProceeds);assert.equal(payoutIncomeSummary([record]).expected,1800);assert.equal(payoutIncomeSummary([record]).actual,1800);
+ const notice=[{id:'synthetic-pause-notice',date:'2026-10-19',accounts:[account],kind:'hedging-profit-removal' as const,amount:null,source:'Synthetic owner notice'}],removed=deriveBalanceAdjustments([pair],history(),[],[],check,notice);assert.equal(removed[0].kind,'firm-adjustment');assert.equal(removed[0].expectedShare,null);
+ const collision=deriveBalanceAdjustments([pair],history(),[record],[],check,notice);assert.equal(collision[0].kind,'firm-adjustment');assert.equal(collision[0].payoutId,undefined);assert.equal(collision[0].expectedShare,null);assert.deepEqual(collision[0].possiblePayoutIds,[record.id]);assert.deepEqual(inferredPayoutSummary(collision),noProceeds);
+ const id=linked[0].id;
+ for(const kind of ['firm-adjustment','unexplained','ignore'] as const){const rows=deriveBalanceAdjustments([pair],history(),[],[{id,kind,note:'Owner correction',updatedAt:time(110)}],check);assert.equal(rows[0].source,'owner');assert.equal(rows[0].kind,kind);assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
 });
 test('provider, connection and currency changes cannot count as likely payouts',()=>{
  const first=point(50000,0),last=point(49000,5),states:Partial<AccountState>[]=[{provider:'CQG'},{provider:''},{connection:'Another login'},{currency:'EUR'}];
