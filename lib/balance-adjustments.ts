@@ -82,7 +82,10 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
  const uses=new Map<string,number>();for(const row of rows)if(row.payoutId)uses.set(row.payoutId,(uses.get(row.payoutId)||0)+1);
  return rows.map(row=>row.payoutId&&(uses.get(row.payoutId)||0)>1?{...row,payoutId:undefined,kind:row.source==='owner'?row.kind:'unexplained' as const,source:row.source==='owner'?'owner' as const:'automatic-estimate' as const,expectedShare:row.source==='owner'?row.expectedShare:null,reasons:[...row.reasons,'More than one deduction could match the same payout.']}:row).sort((a,b)=>b.to.localeCompare(a.to)||a.id.localeCompare(b.id));
 }
+export function unrecordedPayouts(rows:BalanceAdjustment[]){
+ return rows.filter(row=>row.settled&&!row.payoutId&&!row.possiblePayoutIds.length&&(row.kind==='likely-payout'||(row.kind==='payout'&&row.source==='owner'))&&row.amount!==null&&row.amount<0);
+}
 export function inferredPayoutSummary(rows:BalanceAdjustment[]){
- const values=rows.filter(row=>row.settled&&!row.payoutId&&!row.possiblePayoutIds.length&&(row.kind==='likely-payout'||(row.kind==='payout'&&row.source==='owner'))&&row.amount!==null&&row.amount<0);
+ const values=unrecordedPayouts(rows);
  return {count:values.length,gross:round(values.reduce((sum,row)=>sum-row.amount!,0)),expected:round(values.reduce((sum,row)=>sum+(row.expectedShare||0),0))};
 }

@@ -349,7 +349,7 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .checkpoint-payout-confirmation input { margin-top:3px; }
 .checkpoint-payout-confirmation>p { margin-top:9px; font-size:10px; line-height:1.7; }
 
-/* Recorded cash, separate balance estimates and review disclosures. */
+/* Payout ledger and optional correction details. */
 .cash-view-intro>div>strong { display:block; font-size:14px; color:var(--ink); font-weight:550; }
 .cash-view-intro>div>p { max-width:660px; font-size:11px; line-height:1.8; color:var(--text-secondary); margin-top:7px; }
 .cash-view-intro>.button { flex-shrink:0; }
@@ -364,11 +364,6 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .manual-payout-tools[open]>summary>svg { transform:rotate(90deg); }
 .manual-payout-tools>div { padding-top:12px; }
 .manual-payout-tools p { font-size:11px; line-height:1.8; margin-bottom:12px; }
-.inferred-payout-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:25px; padding:16px 23px 20px; }
-.inferred-payout-summary>div { min-width:0; }
-.inferred-payout-summary span { display:block; font-size:11px; line-height:1.7; color:var(--text-secondary); }
-.inferred-payout-summary strong { display:block; font-size:28px; letter-spacing:-.7px; margin:8px 0; font-variant-numeric:tabular-nums; font-weight:600; color:var(--ink); }
-.inferred-payout-summary small { display:block; font-size:11px; line-height:1.7; color:var(--muted); }
 .cash-source-note { font-size:11px; line-height:1.8; color:var(--text-secondary); padding:0 23px 21px; }
 .adjustments-table th { font-size:10px; }
 .adjustments-table>tbody>tr:not(.adjustment-review-row)>td { padding-top:16px; padding-bottom:15px; }
@@ -423,8 +418,6 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
  .cash-records-footer { padding:16px 18px; }
  .manual-payout-tools { margin-left:0; width:100%; max-width:none; }
  .manual-payout-tools>summary { justify-content:flex-start; }
- .inferred-payout-summary { grid-template-columns:1fr; gap:22px; padding:15px 18px 20px; }
- .inferred-payout-summary strong { font-size:26px; }
  .cash-source-note { padding:0 18px 20px; }
  .adjustment-review>summary { padding:11px 18px; }
  .adjustment-review-body { padding:8px 18px 20px; }
