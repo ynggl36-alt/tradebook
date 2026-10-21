@@ -130,7 +130,8 @@ test('firm payout imports persist, replay safely after bank reconciliation, and 
 const integrationAccounts={archive:'LFF05000000000011',loss:'LFF05000000000012',late:'LFF05000000000013',offset:'LFF05000000000014',future:'LFF05000000000015'};
 const integrationPayoutId='integration-metadata-payout';
 let integrationImport=0x1000;
-const {inferredPayoutSummary,KNOWN_FIRM_ADJUSTMENTS}=require('../lib/balance-adjustments')as typeof import('../lib/balance-adjustments');
+const {inferredPayoutSummary}=require('../lib/balance-adjustments')as typeof import('../lib/balance-adjustments');
+const {KNOWN_FIRM_ADJUSTMENTS}=server;
 const {reconstruct}=require('../lib/reconstruct')as typeof import('../lib/reconstruct');
 function integrationCapture(account:string,cash:number|null,capturedAt:string){
  return {schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.4.2',capturedAt,running:true,scopePrefixes:['LFE','LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Integration Lucid login',provider:'Rithmic',values:cash===null?{}:{CashValue:{value:cash,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]};
@@ -171,12 +172,12 @@ test('a late loss upload explains a previously inferred deduction without rewrit
   const account=integrationAccounts.loss;
   await integrationTrade(account,'loss-baseline','2026-10-17T15:50:00Z','2026-10-17T15:51:00Z',100,100.5);
   await server.saveAccountState(integrationCapture(account,50000,'2026-10-17T16:00:00.000Z'));await server.saveAccountState(integrationCapture(account,49000,'2026-10-17T16:05:00.000Z'));
-  const before=await server.loadJournal(),deduction=before.adjustments!.find(row=>row.account===account)!;assert.ok(deduction);assert.equal(deduction.amount,-1000);assert.equal(deduction.kind,'likely-payout');assert.equal(deduction.expectedShare,900);
+  const before=await server.loadJournal(),deduction=before.adjustments!.find(row=>row.account===account)!;assert.ok(deduction);assert.equal(deduction.amount,-1000);assert.equal(deduction.kind,'payout');
   const observations=accountObservations(account),revision=await server.loadJournalVersion(),baselineTrade=before.trades.find(trade=>trade.account===account)!;
   await integrationTrade(account,'late-loss','2026-10-17T16:01:00Z','2026-10-17T16:02:00Z',1000,500.5);
   const after=await server.loadJournal();assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);assert.equal(after.adjustments!.some(row=>row.account===account),false);assert.deepEqual(after.cash,before.cash);assert.deepEqual(accountObservations(account),observations);
   assert.deepEqual(after.trades.find(trade=>trade.id===baselineTrade.id),baselineTrade);assert.equal(after.trades.filter(trade=>trade.account===account).length,2);assert.equal(after.realized!.filter(row=>row.account===account).reduce((total,row)=>total+row.net!,0),-1000);
-  assert.deepEqual(inferredPayoutSummary(after.adjustments!.filter(row=>row.account===account)),{count:0,gross:0,expected:0});
+  assert.deepEqual(inferredPayoutSummary(after.adjustments!.filter(row=>row.account===account)),{count:0,gross:0});
  });
 });
 
@@ -190,7 +191,7 @@ test('a late intermediate capture supersedes its old deduction and owner label w
   const revision=await server.loadJournalVersion(),late=await server.saveAccountState(integrationCapture(account,49500,'2026-10-17T17:05:00.000Z'));assert.equal(late.accepted,false);assert.equal(late.capturedAt,'2026-10-17T17:10:00.000Z');assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
   const lateRevision=await server.loadJournalVersion(),archived=accountObservations(account);await server.saveAccountState(integrationCapture(account,49500,'2026-10-17T17:05:00.000Z'));assert.deepEqual(await server.loadJournalVersion(),lateRevision);assert.deepEqual(accountObservations(account),archived);
   const after=await server.loadJournal(),rows=after.adjustments!.filter(row=>row.account===account);assert.equal(rows.length,2);assert.equal(rows.some(row=>row.id===old.id),false);assert.deepEqual(rows.map(row=>row.amount),[-500,-500]);assert.equal(rows.every(row=>row.source==='automatic-estimate'),true);
-  assert.deepEqual(inferredPayoutSummary(rows),{count:2,gross:1000,expected:900});assert.deepEqual(after.cash,original.cash);assert.equal(accountObservations(account).length,3);
+  assert.deepEqual(inferredPayoutSummary(rows),{count:2,gross:1000});assert.deepEqual(after.cash,original.cash);assert.equal(accountObservations(account).length,3);
   const current=(await server.loadAccountState()).accounts.find(row=>row.account===account)!;assert.equal(current.values.CashValue?.value,49000);assert.equal(current.values.CashValue?.at,'2026-10-17T17:10:00.000Z');assert.ok(sqlite.prepare('SELECT id FROM balance_adjustment_labels WHERE id=?').get(old.id));
   await assert.rejects(()=>server.saveAdjustmentLabel({id:old.id,kind:'payout',note:'Stale interval'}),/superseded|no longer present/i);
  });
@@ -210,7 +211,7 @@ test('unchanged cash with offsetting profit still reveals a debit when the later
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM execution_times WHERE account=?').get(account)!.count,0);
   await server.saveAccountState(integrationCapture(account,53000,'2026-10-18T19:00:00.123Z'));
   const indexed=sqlite.prepare('SELECT time FROM execution_times WHERE account=? ORDER BY time').all(account).map(row=>row.time);assert.deepEqual(indexed,['2026-10-18T19:01:00.123Z','2026-10-18T19:02:00.654Z']);
-  const journal=await server.loadJournal(),rows=journal.adjustments!.filter(row=>row.account===account);assert.equal(rows.length,1);assert.equal(rows[0].before,53000);assert.equal(rows[0].after,53000);assert.equal(rows[0].tradingNet,1000);assert.equal(rows[0].amount,-1000);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,900);
+  const journal=await server.loadJournal(),rows=journal.adjustments!.filter(row=>row.account===account);assert.equal(rows.length,1);assert.equal(rows[0].before,53000);assert.equal(rows[0].after,53000);assert.equal(rows[0].tradingNet,1000);assert.equal(rows[0].amount,-1000);assert.equal(rows[0].kind,'payout');
   const current=(await server.loadAccountState()).accounts.find(row=>row.account===account)!;assert.equal(current.values.CashValue?.value,53000);assert.equal(current.values.RealizedProfitLoss,undefined);assert.equal(sqlite.prepare('SELECT data FROM account_history WHERE account=?').get(account)!.data,data);
  });
 });

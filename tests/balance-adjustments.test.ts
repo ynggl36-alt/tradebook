@@ -4,7 +4,7 @@ import type {AccountState} from '../lib/account-state';
 import type {CashRecord} from '../lib/types';
 import type {RealizedEvent} from '../lib/realized';
 import type {BalanceInterval,BalanceObservation} from '../lib/balance-adjustments';
-import {balanceIntervals,deriveBalanceAdjustments,inferredPayoutSummary,KNOWN_FIRM_ADJUSTMENTS,observation,PAYOUT_CAPTURE_WINDOW_MS} from '../lib/balance-adjustments';
+import {balanceIntervals,deriveBalanceAdjustments,inferredPayoutSummary,observation} from '../lib/balance-adjustments';
 import {payoutIncomeSummary,payoutProceeds} from '../lib/payouts';
 
 const account='LFF05000000000010',base=Date.parse('2026-10-19T15:00:00.000Z');
@@ -20,205 +20,70 @@ function event(net:number|null,minutes:number,id='fill',name=account,start=base)
 function history(events:RealizedEvent[]=[],name=account,start=base){return new Map([[name,[event(0,-1,'known-history',name,start),...events]]]);}
 function interval(before=point(50000,0),after=point(49000,5)):BalanceInterval{return {before,after};}
 function cashRecord(patch:Partial<CashRecord>={}):CashRecord{return {id:'cash-payout',account,kind:'payout',date:'2026-10-19',deduction:1000,received:null,expense:null,note:'Owner payout',...patch};}
-const noProceeds={count:0,gross:0,expected:0};
-const demoNotices=[{id:'synthetic-notice-a',date:'2026-08-03',accounts:[account],kind:'hedging-profit-removal' as const,amount:null,source:'Synthetic test notice'},{id:'synthetic-notice-b',date:'2026-08-10',accounts:['LFE05099999999999'],kind:'hedging-profit-removal' as const,amount:null,source:'Synthetic test notice'}];
+const none={count:0,gross:0};
 
-// CashValue changes alone are not payouts: executions must first explain their
-// portion, and unobserved values or unknown coverage cannot become invented cash.
-test('a trading loss fully explains a cash balance drop without creating an adjustment or payout',()=>{
- const pair=interval(),events=history([event(-1000,2)]),snapshot=JSON.stringify([pair,[...events]]);
- const rows=deriveBalanceAdjustments([pair],events,[],[],now);
- assert.deepEqual(rows,[]);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);assert.equal(JSON.stringify([pair,[...events]]),snapshot);
+test('funded deductions count at their full amount with no firm split, eligibility or amount cap',()=>{
+ for(const debit of [125,500,2000,5000]){
+  const rows=deriveBalanceAdjustments([interval(point(55000,0),point(55000-debit,1500))],history(),[],[],base+1510*60000);
+  assert.equal(rows[0].kind,'payout');assert.equal(rows[0].amount,-debit);assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:debit});assert.equal('expectedShare' in rows[0],false);
+ }
 });
-test('realized profit is removed from a cash drop before estimating the remaining debit',()=>{
- const pair=interval(point(50000,0),point(49250,5)),cash:CashRecord[]=[],snapshot=JSON.stringify(cash),rows=deriveBalanceAdjustments([pair],history([event(250,2)]),cash,[],now);
- assert.equal(rows.length,1);assert.equal(rows[0].tradingNet,250);assert.equal(rows[0].amount,-1000);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].settled,true);
- assert.equal(rows[0].source,'automatic-estimate');assert.equal(rows[0].expectedShare,900);assert.equal(rows[0].payoutId,undefined);
- assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:1000,expected:900});assert.equal(JSON.stringify(cash),snapshot);
+test('legacy readings, recorder pauses, open positions and long gaps do not block account deductions',()=>{
+ const before=point(55000,0),after=point(53000,10000);before.origin='legacy';before.running=false;before.state.positionsAvailable=false;after.state.connected=false;
+ const pair={before,after,gap:true},snapshot=JSON.stringify(pair),rows=deriveBalanceAdjustments([pair],history(),[],[],base+10010*60000);
+ assert.equal(rows[0].kind,'payout');assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:2000});assert.equal(JSON.stringify(pair),snapshot);
 });
-test('a balance credit is separate from payout proceeds even on a recognized funded account',()=>{
- const rows=deriveBalanceAdjustments([interval(point(50000,0),point(51000,5))],history(),[],[],now);
- assert.equal(rows.length,1);assert.equal(rows[0].amount,1000);assert.equal(rows[0].kind,'credit');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
+test('funded profiles enable other firms while evaluation overrides and unknown accounts stay excluded',()=>{
+ for(const stage of ['Funded','Evaluation','Unclassified']){
+  const name='OTHER-FIRM-SYNTHETIC',profiles=[{account:name,label:'Synthetic FundedNext account',stage,status:'Active',notes:''}];
+  const rows=deriveBalanceAdjustments([interval(point(55000,0,name),point(52000,1500,name))],history([],name),[],[],base+1510*60000,[],{profiles});
+  assert.equal(rows[0].kind,stage==='Funded'?'payout':'unexplained');
+ }
+ const profiles=[{account,label:'Override',stage:'Evaluation',status:'Active',notes:''}];
+ assert.equal(deriveBalanceAdjustments([interval()],history(),[],[],now,[],{profiles})[0].kind,'unexplained');
 });
-test('missing cash reads and missing execution history never produce a fabricated payout amount',()=>{
+test('trading losses explain cash drops and gains are subtracted before calculating the payout',()=>{
+ assert.deepEqual(deriveBalanceAdjustments([interval()],history([event(-1000,2)]),[],[],now),[]);
+ const rows=deriveBalanceAdjustments([interval(point(55000,0),point(53250,5))],history([event(250,2)]),[],[],now);
+ assert.equal(rows[0].tradingNet,250);assert.equal(rows[0].amount,-2000);assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:2000});
+ assert.equal(deriveBalanceAdjustments([interval(point(55000,0),point(52750,5))],history([event(-250,2)]),[],[],now)[0].amount,-2000);
+});
+test('missing execution coverage or fees cannot distinguish a trading loss from a payout',()=>{
+ for(const events of [new Map<string,RealizedEvent[]>(),history([event(null,2)]),history([{...event(0,2),coverageIssues:1}])]){
+  const rows=deriveBalanceAdjustments([interval()],events,[],[],now);assert.equal(rows[0].amount,null);assert.deepEqual(inferredPayoutSummary(rows),none);
+ }
+ const knownEmpty=new Map<string,RealizedEvent[]>([[account,[]]]);assert.equal(deriveBalanceAdjustments([interval()],knownEmpty,[],[],now)[0].amount,-1000);
+});
+test('known hedging removals remain firm adjustments and owner classifications still override deductions',()=>{
+ const notice=[{id:'synthetic-hedge',date:'2026-10-19',accounts:[account],kind:'hedging-profit-removal' as const,amount:null,source:'Owner notice'}];
+ const initial=deriveBalanceAdjustments([interval()],history(),[],[],now,notice);assert.equal(initial[0].kind,'firm-adjustment');assert.deepEqual(inferredPayoutSummary(initial),none);
+ for(const kind of ['ignore','firm-adjustment','unexplained','payout'] as const){
+  const rows=deriveBalanceAdjustments([interval()],history(),[],[{id:initial[0].id,kind,note:'Owner correction',updatedAt:time(8)}],now,notice);
+  assert.equal(rows[0].kind,kind);assert.equal(rows[0].source,'owner');assert.equal(inferredPayoutSummary(rows).count,kind==='payout'?1:0);
+ }
+});
+test('saved payouts suppress duplicate deductions even with an unknown historical split',()=>{
+ for(const record of [cashRecord(),cashRecord({deduction:null,payoutAmountBasis:'trader-share',firmPayout:{firm:'Any firm',currency:'USD',amount:900,requestedDate:'2026-10-19',approvedDate:'2026-10-19',status:'Paid',source:'Synthetic'}})]){
+  const rows=deriveBalanceAdjustments([interval()],history(),[record],[],now);assert.ok(rows[0].possiblePayoutIds.includes(record.id));assert.deepEqual(inferredPayoutSummary(rows),none);
+ }
+});
+test('one saved payout cannot explain two separate deductions',()=>{
+ const points=[point(55000,0),point(54000,2),point(53000,5)];
+ const rows=deriveBalanceAdjustments(balanceIntervals(points),history(),[cashRecord()],[],now);assert.equal(rows.length,2);assert.ok(rows.every(row=>!row.payoutId));assert.deepEqual(inferredPayoutSummary(rows),none);
+});
+test('late execution uploads get a short settlement window before a deduction enters totals',()=>{
+ const pair=interval(point(55000,0),{...point(53000,5),receivedAt:time(9)});
+ assert.deepEqual(inferredPayoutSummary(deriveBalanceAdjustments([pair],history(),[],[],now)),none);
+ assert.deepEqual(inferredPayoutSummary(deriveBalanceAdjustments([pair],history(),[],[],base+12*60000)),{count:1,gross:2000});
+});
+test('cash credits, missing values and currency changes do not become payouts',()=>{
+ assert.equal(deriveBalanceAdjustments([interval(point(50000,0),point(51000,5))],history(),[],[],now)[0].kind,'credit');
  const before=point(50000,0),after=point(49000,5);
- for(const pair of [{before:{...before,state:{...before.state,values:{}}},after},{before,after:{...after,state:{...after.state,values:{}}}}])assert.deepEqual(deriveBalanceAdjustments([pair],history(),[],[],now),[]);
- for(const events of [new Map<string,RealizedEvent[]>(),new Map([[account,[]]]),history([], 'LFF05000000000019999')]){
-  const rows=deriveBalanceAdjustments([{before,after}],events,[],[],now);assert.equal(rows.length,1);assert.equal(rows[0].amount,null);assert.equal(rows[0].tradingNet,null);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
- assert.deepEqual(deriveBalanceAdjustments([],history(),[],[],now),[]);
+ assert.deepEqual(deriveBalanceAdjustments([interval(before,{...after,state:{...after.state,currency:'CAD'}})],history(),[],[],now),[]);
+ assert.deepEqual(deriveBalanceAdjustments([interval({...before,state:{...before.state,values:{}}},after)],history(),[],[],now),[]);
 });
-test('expected inferred proceeds apply the 90 percent Lucid share with cent rounding and remain estimates',()=>{
- for(const [debit,expected] of [[500,450],[750.55,675.5],[1000.01,900.01],[2000,1800]]){
-  const rows=deriveBalanceAdjustments([interval(point(50000,0),point(50000-debit,5))],history(),[],[],now);
-  assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].amount,-debit);assert.equal(rows[0].expectedShare,expected);assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:debit,expected});
- }
-});
-
-test('duplicate and out-of-order captures yield adjacent intervals and late inserts supersede the former interval',()=>{
- const first=point(50000,0),middle=point(49500,2),last=point(49000,5),oldRows=deriveBalanceAdjustments(balanceIntervals([first,last]),history(),[],[],now),oldId=oldRows[0].id;
- assert.deepEqual(inferredPayoutSummary(oldRows),{count:1,gross:1000,expected:900});
- const observations=[last,middle,first,structuredClone(first),structuredClone(last),structuredClone(middle)],snapshot=JSON.stringify(observations),pairs=balanceIntervals(observations);
- assert.deepEqual(pairs.map(pair=>[pair.before.capturedAt,pair.after.capturedAt]),[[first.capturedAt,middle.capturedAt],[middle.capturedAt,last.capturedAt]]);
- const labels=[{id:oldId,kind:'payout' as const,note:'Classification of the superseded interval',updatedAt:time(10)}],rows=deriveBalanceAdjustments(pairs,history(),[],labels,now);
- assert.equal(rows.length,2);assert.equal(rows.some(row=>row.id===oldId),false);assert.equal(rows.every(row=>row.source==='automatic-estimate'),true);assert.deepEqual(rows.map(row=>row.amount),[-500,-500]);
- assert.deepEqual(inferredPayoutSummary(rows),{count:2,gross:1000,expected:900});assert.equal(JSON.stringify(observations),snapshot);
- assert.deepEqual(deriveBalanceAdjustments(balanceIntervals([...observations].reverse()),history(),[],labels,now),rows);
-});
-test('conflicting captures at one time are rejected and a real capture replaces a legacy baseline at that time',()=>{
- const first=point(50000,0),last=point(49000,5),legacy={...first,id:'legacy:'+first.id,origin:'legacy' as const,running:false};
- assert.throws(()=>balanceIntervals([first,point(49999,0),last]),/conflict/i);
- for(const points of [[legacy,last,first],[first,last,legacy]]){
-  const pairs=balanceIntervals(points);assert.equal(pairs.length,1);assert.equal(pairs[0].before.origin,'capture');assert.equal(pairs[0].before.id,first.id);
- }
-});
-
-test('a matching cash deduction or firm confirmation explains the debit without adding inferred proceeds',()=>{
- const firm=cashRecord({id:'firm-payout',deduction:null,note:'',firmPayout:{firm:'Lucid',currency:'USD',amount:1000,requestedDate:'2026-10-18',approvedDate:'2026-10-19',status:'Paid',source:'Owner firm record'}});
- for(const record of [cashRecord(),firm]){
-  const cash=[record],snapshot=JSON.stringify(cash),rows=deriveBalanceAdjustments([interval()],history(),cash,[],now);
-  assert.equal(rows[0].kind,'payout');assert.equal(rows[0].payoutId,record.id);assert.deepEqual(rows[0].possiblePayoutIds,[record.id]);
-  assert.deepEqual(inferredPayoutSummary(rows),noProceeds);assert.equal(payoutIncomeSummary(cash).expected,900);assert.equal(payoutIncomeSummary(cash).actual,null);assert.equal(JSON.stringify(cash),snapshot);
- }
-});
-test('bank receipts and firm trader-share amounts are possible matches that cannot create duplicate proceeds',()=>{
- const received=cashRecord({id:'bank-receipt',deduction:null,received:900,date:'2026-10-22'}),share=cashRecord({id:'firm-trader-share',deduction:null,payoutAmountBasis:'trader-share',payoutSplit:.9,firmPayout:{firm:'Lucid',currency:'USD',amount:900,requestedDate:'2026-10-18',approvedDate:'2026-10-19',status:'Paid',source:'Owner firm record'}});
- for(const record of [received,share]){
-  const rows=deriveBalanceAdjustments([interval()],history(),[record],[],postingNow);
-  assert.equal(payoutProceeds(record).gross,null);assert.equal(payoutProceeds(record).expected,900);assert.equal(rows[0].possiblePayoutIds.includes(record.id),true);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
-  assert.equal(payoutIncomeSummary([record]).expected!+inferredPayoutSummary(rows).expected,900);
- }
-});
-test('payout matching allows the three-day posting window and rejects records outside it or on another account',()=>{
- for(const date of ['2026-10-16','2026-10-22']){
-  const record=cashRecord({id:'posted-'+date,date}),rows=deriveBalanceAdjustments([interval()],history(),[record],[],postingNow);
-  assert.equal(rows[0].payoutId,record.id);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
- const earlyFirm=cashRecord({id:'approved-three-days-earlier',deduction:null,firmPayout:{firm:'Lucid',currency:'USD',amount:1000,requestedDate:'2026-10-15',approvedDate:'2026-10-16',status:'Paid',source:'Owner firm record'}});
- assert.equal(deriveBalanceAdjustments([interval()],history(),[earlyFirm],[],postingNow)[0].payoutId,earlyFirm.id);
- for(const record of [cashRecord({date:'2026-10-15'}),cashRecord({date:'2026-10-23'}),cashRecord({account:'LFF05000000000019999'})]){
-  const rows=deriveBalanceAdjustments([interval()],history(),[record],[],postingNow);assert.equal(rows[0].payoutId,undefined);assert.deepEqual(rows[0].possiblePayoutIds,[]);assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:1000,expected:900});
- }
-});
-test('one known payout cannot explain two deductions or cause either candidate to add proceeds again',()=>{
- const pairs=balanceIntervals([point(50000,0),point(49000,2),point(48000,5)]),record=cashRecord(),rows=deriveBalanceAdjustments(pairs,history(),[record],[],now);
- assert.equal(rows.length,2);assert.equal(rows.every(row=>row.payoutId===undefined),true);assert.equal(rows.every(row=>row.possiblePayoutIds.includes(record.id)),true);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- assert.equal(payoutIncomeSummary([record]).expected,900);
-});
-test('owner classification can exclude a known debit but cannot invent money from unknown coverage',()=>{
- const pair=interval(),id=deriveBalanceAdjustments([pair],history(),[],[],now)[0].id;
- for(const kind of ['firm-adjustment','unexplained','ignore'] as const){
-  const rows=deriveBalanceAdjustments([pair],history(),[],[{id,kind,note:'Owner classification',updatedAt:time(10)}],now);
-  assert.equal(rows[0].kind,kind);assert.equal(rows[0].source,'owner');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
- const label={id,kind:'payout' as const,note:'Confirmed by owner',updatedAt:time(10)},unknown=deriveBalanceAdjustments([pair],new Map(),[],[label],now);
- assert.equal(unknown[0].kind,'payout');assert.equal(unknown[0].amount,null);assert.equal(unknown[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(unknown),noProceeds);
-});
-
-test('both known hedging incidents remain firm adjustments with no invented notice amount or payout income',()=>{
- assert.equal(demoNotices.length,2);
- for(const notice of demoNotices){
-  assert.equal(notice.kind,'hedging-profit-removal');assert.equal(notice.amount,null);
-  for(const name of notice.accounts){
-   const start=Date.parse(notice.date+'T15:00:00Z'),pair=interval(point(50000,0,name,start),point(49000,5,name,start)),at=start+10*60000;
-   const known=deriveBalanceAdjustments([pair],history([],name,start),[],[],at,demoNotices);assert.equal(known[0].kind,'firm-adjustment');assert.equal(known[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(known),noProceeds);
-   const unknown=deriveBalanceAdjustments([pair],new Map(),[],[],at,demoNotices);assert.equal(unknown[0].kind,'firm-adjustment');assert.equal(unknown[0].amount,null);assert.equal(unknown[0].tradingNet,null);assert.deepEqual(inferredPayoutSummary(unknown),noProceeds);
-  }
- }
- assert.deepEqual(deriveBalanceAdjustments([],new Map(),[],[],now),[]);
-});
-
-// Pauses are compatible with estimated payouts; accounting/source problems are
-// still blockers even when the residual is an ordinary payout-sized amount.
-test('legacy, absent and disconnected endpoints cannot count as likely payouts',()=>{
- const first=point(50000,0),last=point(49000,5),pairs:BalanceInterval[]=[
-  {before:{...first,origin:'legacy'},after:last},{before:first,after:{...last,origin:'legacy'}},
-  {before:{...first,origin:'not-seen'},after:last},{before:first,after:{...last,origin:'not-seen'}},
-  {before:{...first,state:{...first.state,connected:false}},after:last},{before:first,after:{...last,state:{...last.state,connected:false}}},
-  {before:first,after:last,gap:true},
- ];
- for(const pair of pairs){const rows=deriveBalanceAdjustments([pair],history(),[],[],now);assert.equal(rows.length,1);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.length);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
-});
-test('ordinary pauses and overnight captures infer a payout without inventing a recorded receipt',()=>{
- for(const minutes of [5,21,102,16*60,PAYOUT_CAPTURE_WINDOW_MS/60000])for(const stopped of ['before','after','both','neither']){
-  const first=point(55000,0),last=point(53000,minutes);if(stopped==='before'||stopped==='both')first.running=false;if(stopped==='after'||stopped==='both')last.running=false;
-  const pair=interval(first,last),cash:CashRecord[]=[],snapshot=JSON.stringify([pair,cash]),rows=deriveBalanceAdjustments([pair],history(),cash,[],base+(minutes+4)*60000);
-  assert.equal(rows.length,1);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].amount,-2000);assert.equal(rows[0].expectedShare,1800);assert.equal(rows[0].source,'automatic-estimate');assert.equal(rows[0].settled,true);assert.equal(rows[0].payoutId,undefined);
-  assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:2000,expected:1800});assert.deepEqual(payoutIncomeSummary(cash),{count:0,gross:null,expected:null,actual:null,estimatedCount:0});assert.equal(JSON.stringify([pair,cash]),snapshot);
-  if(stopped!=='neither')assert.ok(rows[0].reasons.some(reason=>reason.includes('stopped')));if(minutes>20)assert.ok(rows[0].reasons.some(reason=>reason.includes('unrecorded activity')));
- }
-});
-test('pauses still subtract saved trading activity and wait for the latest upload to settle',()=>{
- const pair=interval({...point(55000,0),running:false,receivedAt:time(105)},{...point(53250,102),receivedAt:time(106)}),events=history([event(250,50)]);
- const pending=deriveBalanceAdjustments([pair],events,[],[],base+108*60000);assert.equal(pending[0].amount,-2000);assert.equal(pending[0].settled,false);assert.deepEqual(inferredPayoutSummary(pending),noProceeds);
- const rows=deriveBalanceAdjustments([pair],events,[],[],base+109*60000);assert.equal(rows[0].kind,'likely-payout');assert.equal(rows[0].tradingNet,250);assert.equal(rows[0].expectedShare,1800);
- const withLoss=deriveBalanceAdjustments([interval({...point(55000,0),running:false},point(52750,102))],history([event(-250,50)]),[],[],base+110*60000);assert.equal(withLoss[0].tradingNet,-250);assert.equal(withLoss[0].amount,-2000);assert.equal(withLoss[0].expectedShare,1800);
- const explained=deriveBalanceAdjustments([interval({...point(55000,0),running:false},point(53000,102))],history([event(-2000,50)]),[],[],base+110*60000);assert.deepEqual(explained,[]);
-});
-test('more than 72 hours between cash observations cannot automatically infer or link a payout',()=>{
- const minutes=(PAYOUT_CAPTURE_WINDOW_MS+1)/60000,pair=interval(point(55000,0),point(53000,minutes));
- for(const cash of [[],[cashRecord({deduction:2000})]]){
-  const rows=deriveBalanceAdjustments([pair],history(),cash,[],base+(minutes+4)*60000);assert.equal(rows.length,1);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].payoutId,undefined);assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.some(reason=>reason.includes('72 hours')));assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
-});
-test('paused estimates preserve accounting blockers, product scope and payout amount limits',()=>{
- const first={...point(55000,0),running:false},last=point(53000,102),check=base+110*60000;
- for(const pair of [interval(first,{...last,state:{...last.state,provider:'Changed'}}),interval(first,{...last,state:{...last.state,positionsAvailable:false}}),{...interval(first,last),gap:true},interval({...first,origin:'legacy'},last)]){
-  const rows=deriveBalanceAdjustments([pair],history(),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
- for(const events of [new Map<string,RealizedEvent[]>(),history([event(null,50)]),history([{...event(0,50),net:null,coverageIssues:1}])]){
-  const rows=deriveBalanceAdjustments([interval(first,last)],events,[],[],check);assert.equal(rows[0].amount,null);assert.equal(rows[0].kind,'unexplained');assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
- for(const name of ['LFE05000000000010','OTHER00000000010']){
-  const rows=deriveBalanceAdjustments([interval({...point(55000,0,name),running:false},point(53000,102,name))],history([],name),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);
- }
- for(const debit of [499.99,2000.01]){const rows=deriveBalanceAdjustments([interval(first,point(55000-debit,102))],history(),[],[],check);assert.equal(rows[0].kind,'unexplained');assert.equal(rows[0].expectedShare,null);}
-});
-test('paused estimates keep recorded payouts, firm removals and owner corrections out of additional proceeds',()=>{
- const pair=interval({...point(55000,0),running:false},point(53000,102)),record=cashRecord({deduction:2000,received:1800}),check=base+110*60000;
- const linked=deriveBalanceAdjustments([pair],history(),[record],[],check);assert.equal(linked[0].payoutId,undefined);assert.deepEqual(linked[0].possiblePayoutIds,[record.id]);assert.deepEqual(inferredPayoutSummary(linked),noProceeds);assert.equal(payoutIncomeSummary([record]).expected,1800);assert.equal(payoutIncomeSummary([record]).actual,1800);
- const notice=[{id:'synthetic-pause-notice',date:'2026-10-19',accounts:[account],kind:'hedging-profit-removal' as const,amount:null,source:'Synthetic owner notice'}],removed=deriveBalanceAdjustments([pair],history(),[],[],check,notice);assert.equal(removed[0].kind,'firm-adjustment');assert.equal(removed[0].expectedShare,null);
- const collision=deriveBalanceAdjustments([pair],history(),[record],[],check,notice);assert.equal(collision[0].kind,'firm-adjustment');assert.equal(collision[0].payoutId,undefined);assert.equal(collision[0].expectedShare,null);assert.deepEqual(collision[0].possiblePayoutIds,[record.id]);assert.deepEqual(inferredPayoutSummary(collision),noProceeds);
- const id=linked[0].id;
- for(const kind of ['firm-adjustment','unexplained','ignore'] as const){const rows=deriveBalanceAdjustments([pair],history(),[],[{id,kind,note:'Owner correction',updatedAt:time(110)}],check);assert.equal(rows[0].source,'owner');assert.equal(rows[0].kind,kind);assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
-});
-test('provider, connection and currency changes cannot count as likely payouts',()=>{
- const first=point(50000,0),last=point(49000,5),states:Partial<AccountState>[]=[{provider:'CQG'},{provider:''},{connection:'Another login'},{currency:'EUR'}];
- for(const patch of states){const rows=deriveBalanceAdjustments([{before:first,after:{...last,state:{...last.state,...patch}}}],history(),[],[],now);assert.equal(rows.some(row=>row.kind==='likely-payout'),false);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
- const eurFirst={...first,state:{...first.state,currency:'EUR'}},eurLast={...last,state:{...last.state,currency:'EUR'}};
- assert.deepEqual(deriveBalanceAdjustments([{before:eurFirst,after:eurLast}],history(),[],[],now),[]);
-});
-test('stale balance reads, stale positions and open or unavailable positions cannot count as likely payouts',()=>{
- const first=point(50000,0),last=point(49000,5),pairs:BalanceInterval[]=[
-  {before:{...first,state:{...first.state,values:{CashValue:{...first.state.values.CashValue!,at:time(-1)}}}},after:last},
-  {before:first,after:{...last,state:{...last.state,values:{CashValue:{...last.state.values.CashValue!,at:time(4)}}}}},
-  {before:first,after:{...last,state:{...last.state,positionsAt:time(4)}}},
-  {before:first,after:{...last,state:{...last.state,positionsAvailable:false,positionsAt:null}}},
-  {before:first,after:{...last,state:{...last.state,positions:[{instrument:'MNQ 2026-12',side:'Long',quantity:1,averagePrice:100}]}}},
- ];
- for(const pair of pairs){const rows=deriveBalanceAdjustments([pair],history(),[],[],now);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);}
-});
-test('an execution at either balance timestamp leaves ordering ambiguous and cannot count as a likely payout',()=>{
- for(const minutes of [0,5]){
-  const rows=deriveBalanceAdjustments([interval()],history([event(0,minutes,'boundary-fill')]),[],[],now);
-  assert.equal(rows.length,1);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.some(reason=>/timestamp|boundary/i.test(reason)));assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
-});
-test('a six-fraction execution timestamp at the same instant as a three-fraction cash read remains an ambiguous boundary',()=>{
- for(const minutes of [0,5]){
-  const boundary={...event(0,minutes,'precise-boundary'),time:time(minutes).replace('.000Z','.000000Z')},rows=deriveBalanceAdjustments([interval()],history([boundary]),[],[],now);
-  assert.equal(Date.parse(boundary.time),Date.parse(time(minutes)));assert.equal(rows.length,1);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.ok(rows[0].reasons.some(reason=>/timestamp|boundary/i.test(reason)));assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
-});
-test('unknown fees or missing inventory during the interval cannot become an inferred debit',()=>{
- for(const fill of [event(null,2),{...event(0,2),net:null,unmatched:1,coverageIssues:1}]){
-  const rows=deriveBalanceAdjustments([interval()],history([fill]),[],[],now);assert.equal(rows[0].tradingNet,null);assert.equal(rows[0].amount,null);assert.notEqual(rows[0].kind,'likely-payout');assert.equal(rows[0].expectedShare,null);assert.deepEqual(inferredPayoutSummary(rows),noProceeds);
- }
-});
-test('settling waits three minutes from the latest receipt at either endpoint',()=>{
- for(const [beforeReceived,afterReceived,checkMinute,settledMinute] of [[8,6,10,11],[1,9,11,12]]){
-  const pair=interval({...point(50000,0),receivedAt:time(beforeReceived)},{...point(49000,5),receivedAt:time(afterReceived)});
-  const pending=deriveBalanceAdjustments([pair],history(),[],[],base+checkMinute*60000);assert.equal(pending[0].settled,false);assert.deepEqual(inferredPayoutSummary(pending),noProceeds);
-  const settled=deriveBalanceAdjustments([pair],history(),[],[],base+settledMinute*60000);assert.equal(settled[0].settled,true);assert.equal(settled[0].kind,'likely-payout');assert.deepEqual(inferredPayoutSummary(settled),{count:1,gross:1000,expected:900});
- }
+test('immutable observations prefer a real capture over legacy copies and reject conflicting captures',()=>{
+ const before=point(55000,0),after=point(53000,5),legacy={...before,origin:'legacy' as const,id:'legacy:'+before.id};
+ const pairs=balanceIntervals([after,legacy,before]);assert.equal(pairs.length,1);assert.equal(pairs[0].before.id,before.id);
+ assert.throws(()=>balanceIntervals([before,{...before,running:false}]),/Conflicting/);
 });

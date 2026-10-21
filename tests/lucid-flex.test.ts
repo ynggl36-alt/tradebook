@@ -101,7 +101,7 @@ test('future trades, sessions and exact approval timestamps do not advance or re
  assert.equal(flexPayoutDays(account,[],ref(),[],now,{sessions:[session(150,'2026-10-20')],checkpoints:[capture(null,0)]}).days,3);
 });
 test('a new likely payout suspends the old cycle count without inventing an approval or reset',()=>{
- const adjustment:BalanceAdjustment={id:'new-deduction',account,date:'2026-10-19',from:'2026-10-19T14:59:00Z',to:'2026-10-19T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'likely-payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],expectedShare:1800,reasons:[],note:''};
+ const adjustment:BalanceAdjustment={id:'new-deduction',account,date:'2026-10-19',from:'2026-10-19T14:59:00Z',to:'2026-10-19T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'likely-payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],reasons:[],note:''};
  const result=flexPayoutDays(account,[],ref(5),[],now,{adjustments:[adjustment]});assert.equal(result.days,null);assert.equal(result.reason,'possible-payout');
  for(const change of [{...adjustment,kind:'firm-adjustment' as const},{...adjustment,settled:false},{...adjustment,to:'2026-10-19T14:00:00Z'},{...adjustment,account:'another'},{...adjustment,to:'2026-10-20T15:00:00Z'}])assert.equal(flexPayoutDays(account,[],ref(5),[],now,{adjustments:[change]}).days,5);
  const newCheckpoint=ref(0);newCheckpoint.flex!.capturedAt='2026-10-19T15:30:00Z';assert.equal(flexPayoutDays(account,[],newCheckpoint,[],now,{adjustments:[adjustment]}).days,0);
