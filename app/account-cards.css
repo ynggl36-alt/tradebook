@@ -1,3 +1,5 @@
+.stats-grid.account-state-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:760px){.stats-grid.account-state-stats{grid-template-columns:minmax(0,1fr)}}
 .account-stage-groups{padding:0 20px 20px}
 .account-stage-group{min-width:0}
 .account-stage-group+.account-stage-group{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
