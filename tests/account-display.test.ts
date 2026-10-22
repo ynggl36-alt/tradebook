@@ -17,13 +17,14 @@ const ids=(group:ReturnType<typeof accountCardGroups>[number])=>group.accounts.m
 
 test('funded order uses remaining qualifying days, starts fresh cycles automatically, and shares displayed progress',()=>{
  const data=journal(),far=funded('101'),near=funded('102'),goal=funded('103'),unknown=funded('104');
- data.firmReferences=[reference(far,1),reference(near,4),reference(goal,5)];
+ data.firmReferences=[reference(far,5),reference(near,0),reference(goal,1)];
+ const days=['2026-10-14','2026-10-15','2026-10-16','2026-10-19','2026-10-20'];data.realizedSessions=[session(far,150,days[0]),...days.slice(0,4).map(day=>session(near,150,day)),...days.map(day=>session(goal,150,day))];
  const [group]=accountCardGroups([far,unknown,near,goal].map(state),data,new Map(),now);
  assert.deepEqual(ids(group),[goal,near,far,unknown]);
  assert.equal(group.accounts[0].progress?.payout.remaining,0);assert.equal(group.accounts[1].progress?.payout.remaining,1);assert.equal(group.accounts[3].progress?.payout.remaining,5);
 });
 test('a later approval removes an old day-goal account from the front without inventing a cycle reset',()=>{
- const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];
+ const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];data.realizedSessions=['2026-10-15','2026-10-16','2026-10-19','2026-10-20'].map(day=>session(near,150,day));
  data.cash=[{id:'synthetic-approval',account:reset,kind:'payout',date:'2026-10-20',deduction:null,received:null,expense:null,note:'',payoutApprovalAt:'2026-10-20T14:00:00.000Z'}];
  const [group]=accountCardGroups([reset,near].map(state),data,new Map(),now);
  assert.deepEqual(ids(group),[near,reset]);assert.equal(group.accounts[1].progress?.payout.reason,'payout');assert.equal(group.accounts[1].progress?.payout.days,null);
@@ -44,7 +45,7 @@ test('explicit stages win, unknown products stay unranked, and archived accounts
 });
 
 test('a detected payout returns the account to five remaining days and sorts it behind closer accounts',()=>{
- const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];
+ const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];data.realizedSessions=['2026-10-15','2026-10-16','2026-10-19','2026-10-20'].map(day=>session(near,150,day));
  data.adjustments=[{id:'synthetic-reset',account:reset,date:'2026-10-20',from:'2026-10-20T14:00:00Z',to:'2026-10-20T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],reasons:[],note:''}];
  const [group]=accountCardGroups([reset,near].map(state),data,new Map(),now);
  assert.deepEqual(ids(group),[near,reset]);assert.equal(group.accounts[1].progress?.payout.days,0);assert.equal(group.accounts[1].progress?.payout.remaining,5);

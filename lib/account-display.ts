@@ -1,5 +1,7 @@
 import type {AccountState} from './account-state';
 import type {AccountProfile,Journal,Trade} from './types';
+import {cashLedgerRows} from './cash-ledger';
+import {centralDay} from './analytics';
 import {accountStage,flexAccount,flexEvaluation,flexPayoutDays} from './lucid-flex';
 
 export function accountFlexProgress(account:string,journal:Journal,now=Date.now(),accountTrades?:Trade[],profile?:AccountProfile){
@@ -8,7 +10,9 @@ export function accountFlexProgress(account:string,journal:Journal,now=Date.now(
  if(!flexAccount(account)||(stage!=='Funded'&&stage!=='Evaluation'))return null;
  const trades=accountTrades??journal.trades.filter(trade=>trade.account===account);
  const ledger={reportedSessions:journal.reportedSessions,reportedCheckpoints:journal.reportedCheckpoints,adjustments:journal.adjustments,sessions:journal.realizedSessions?.filter(row=>row.account===account),checkpoints:journal.realizedCheckpoints?.filter(row=>row.account===account)};
- return {stage,payout:flexPayoutDays(account,trades,reference,journal.cash,now,ledger),evaluation:flexEvaluation(trades,reference?.flex?.consistencyPercent??null,ledger)};
+ const currentDay=centralDay(new Date(now).toISOString());
+ const payoutCount=cashLedgerRows(journal.cash,journal.adjustments||[]).filter(row=>row.kind==='payout'&&row.account===account&&row.date<=currentDay).length;
+ return {stage,payout:{...flexPayoutDays(account,trades,journal.cash,now,ledger),payoutCount},evaluation:flexEvaluation(trades,reference?.flex?.consistencyPercent??null,ledger)};
 }
 export type AccountFlexProgress=NonNullable<ReturnType<typeof accountFlexProgress>>;
 export type AccountCard={state:AccountState;profile:AccountProfile|undefined;stage:string;progress:AccountFlexProgress|null};

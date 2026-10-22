@@ -19,7 +19,7 @@ test('platform session values are validated with commissions and replace broken 
  const native=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse(time(7)));
  assert.equal(native.sessions[0].net,280);assert.equal(aggregateRealized(events,'session')[0].net,null);
  const adjustments=deriveBalanceAdjustments(balanceIntervals(rows.map(r=>observation(state(r),'0.5.0',true))),new Map([[account,events]]),[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
- assert.deepEqual(adjustments,[]);const progress=flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions});assert.equal(progress.days,1);assert.equal(progress.today,280);
+ assert.deepEqual(adjustments,[]);const progress=flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions});assert.equal(progress.days,1);assert.equal(progress.today,280);
  assert.equal(JSON.stringify({fills,rows}),before);
 });
 test('a real same-session payout remains a full deduction and resets only post-payout qualifying profit',()=>{
@@ -27,7 +27,7 @@ test('a real same-session payout remains a full deduction and resets only post-p
  const adjustments=deriveBalanceAdjustments(balanceIntervals(rows.map(r=>observation(state(r),'0.5.0',true))),new Map([[account,events]]),[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
  assert.equal(adjustments.length,1);assert.equal(adjustments[0].amount,-2000);assert.equal(adjustments[0].kind,'payout');
  const checkpoint=reportedCheckpoint(account,time(3),native,events)!;assert.equal(checkpoint.net,159);assert.equal(checkpoint.afterNet,0);
- const progress=flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions,reportedCheckpoints:[checkpoint],adjustments});assert.equal(progress.days,0);
+ const progress=flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions,reportedCheckpoints:[checkpoint],adjustments});assert.equal(progress.days,0);
 });
 test('stale, disconnected, non-USD, future and gross-only reporting cannot masquerade as verified session net',()=>{
  const events=realizedEvents(account,baseline);
@@ -35,7 +35,7 @@ test('stale, disconnected, non-USD, future and gross-only reporting cannot masqu
 });
 test('reported days use the latest value, never a peak, and do not double-count contracts or native plus model',()=>{
  const events=realizedEvents(account,baseline),native=reportedAccountSessions([row(2,159),row(3,149)],new Map([[account,events]]),Date.parse(time(7)));
- const progress=flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions});assert.equal(progress.days,0);assert.equal(progress.today,149);
+ const progress=flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions});assert.equal(progress.days,0);assert.equal(progress.today,149);
 });
 test('counter carryover cannot validate a new session and native deltas never cross connection or session boundaries',()=>{
  const events=realizedEvents(account,baseline),later='2026-10-20T23:00:00.000Z',rows=[row(2,159),row(3,159,50159,{connection:'Changed'}),row(4,159,50159,{capturedAt:later,netAt:later,cashAt:later})],native=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse('2026-10-21T00:00:00Z'));
@@ -57,9 +57,9 @@ test('a checkpoint newer than the latest account reading never invents a negativ
 
 test('known fills after the latest native read advance its total, while a broken tail stays unresolved',()=>{
  const clean=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,20,3)]),native=reportedAccountSessions([row(2,159)],new Map([[account,clean]]),Date.parse(time(7)));
- assert.equal(native.sessions[0].net,149);assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(clean,'session'),reportedSessions:native.sessions}).days,0);
+ assert.equal(native.sessions[0].net,149);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(clean,'session'),reportedSessions:native.sessions}).days,0);
  const broken=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,22,3)]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
- assert.equal(partial.sessions.length,0);assert.equal(partial.readings.size,1);assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(broken,'session'),reportedSessions:partial.sessions}).days,null);
+ assert.equal(partial.sessions.length,0);assert.equal(partial.readings.size,1);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(broken,'session'),reportedSessions:partial.sessions}).days,null);
 });
 
 // A redundant provider position can disagree even when the economic fills and
@@ -75,7 +75,7 @@ test('a late first P&L reading reconciles economic fills from an observed flat i
  const fills=disputed(),rows=[flatRow(),positioned(6,254)],before=JSON.stringify({fills,rows}),native=reconcile(fills,rows),original=realizedEvents(account,fills);
  assert.equal(aggregateRealized(original,'session')[0].net,null);assert.equal(native.sessions[0].net,254);assert.equal(native.projections.size,1);
  const resolved=native.reconciledEvents.get(account)!;assert.equal(resolved.length,original.length);assert.deepEqual(resolved.map(e=>e.fillId),original.map(e=>e.fillId));assert.equal(aggregateRealized([...resolved],'session')[0].net,254);
- assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse(time(9)),{sessions:aggregateRealized(original,'session'),reportedSessions:native.sessions}).days,1);
+ assert.equal(flexPayoutDays(account,[],[],Date.parse(time(9)),{sessions:aggregateRealized(original,'session'),reportedSessions:native.sessions}).days,1);
  assert.equal(JSON.stringify({fills,rows}),before);
 });
 test('position reconciliation requires an earlier fresh flat observation on the same account, connection and provider',()=>{
