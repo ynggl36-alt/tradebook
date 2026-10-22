@@ -7,7 +7,7 @@ import {netTradePnl} from './trading-costs';
 import {flexSession,flexSessionStart} from './trading-session';
 
 export const FLEX_DAILY_MIN=150,FLEX_PROFIT_DAYS=5;
-type Reason='payout'|'costs'|'coverage'|'baseline'|'approval-time'|null;
+type Reason='payout'|'costs'|'coverage'|'baseline'|'approval-time'|'payout-time'|null;
 type Day={day:string;net:number|null;reason:Reason};
 function deductions(account:string,adjustments:readonly BalanceAdjustment[]=[],now=Date.now()){
  return adjustments.filter(row=>row.account===account&&row.settled&&!row.settlementOffsetId&&row.amount!==null&&Number.isFinite(row.amount)&&row.amount<0&&(row.kind==='payout'||row.kind==='likely-payout')&&Number.isFinite(Date.parse(row.to))&&Date.parse(row.to)<=now);
@@ -72,11 +72,13 @@ export function flexPayoutDays(account:string,trades:Trade[],reference:FirmRefer
  const rows=sessionDays(account,trades,now,options),todayDay=flexSession(new Date(now).toISOString()),today=rows.find(r=>r.day===todayDay)?.net??null;
  const reset=latestPayoutDeduction(account,options?.adjustments,now),firm=reference?.flex,candidate=firm?.stage==='Funded'&&firm.qualifyingDays!==null?Date.parse(firm.capturedAt):NaN,firmAt=Number.isFinite(candidate)&&candidate<=now?candidate:null;
  const cycle=cycleRows(account,reset,rows,options),profitBaselineKnown=reset?unobservedPayout(account,cash,reset.to,now,options)===null:!cash.some(row=>row.account===account&&row.kind==='payout');
- const cycleProfit=!profitBaselineKnown||cycle.some(row=>row.net===null)?null:round(cycle.reduce((sum,row)=>sum+row.net!,0));
+ const uncertainReset=!!reset&&(reset.tradingActivity??(reset.tradingNet!==null&&reset.tradingNet!==0));
+ const cycleProfit=!profitBaselineKnown||uncertainReset||cycle.some(row=>row.net===null)?null:round(cycle.reduce((sum,row)=>sum+row.net!,0));
  const result={cycleProfit,confirmedDays:0,days:null as number|null,remaining:null as number|null,estimated:true,today,checkpointDate:reference?.date||null,payoutResetAt:null as string|null,source:'funded-start' as 'funded-start'|'payout'|'firm-checkpoint',reason:null as Reason};
  if(reset&&(firmAt===null||Date.parse(reset.to)>firmAt)){
   const reason=unobservedPayout(account,cash,reset.to,now,options);
-  return {...result,source:'payout' as const,payoutResetAt:reset.to,today:cycle[0].day===todayDay?cycle[0].net:today,...(reason?{reason,cycleProfit:null}:countDays(cycle))};
+  const counted=countDays(cycle);
+  return {...result,source:'payout' as const,payoutResetAt:reset.to,today:cycle[0].day===todayDay?cycle[0].net:today,...(reason?{reason,cycleProfit:null}:uncertainReset&&counted.confirmedDays<FLEX_PROFIT_DAYS?{...counted,days:null,remaining:null,reason:'payout-time' as const}:counted)};
  }
  if(firmAt!==null&&reference){
   const reason=unobservedPayout(account,cash,firm!.capturedAt,now,options,firm!.coveredPayoutIds),base=firmBaseline(account,trades,reference,options),later=rows.filter(r=>r.day>base.day);

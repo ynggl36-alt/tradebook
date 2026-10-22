@@ -22,3 +22,7 @@ test('pending session data keeps earlier confirmed profit days visible in text a
  const journal=data();journal.adjustments=[];journal.realizedSessions=[{account,contract:'MNQ 2026-12',symbol:'MNQ',day:'2026-10-21',gross:201,commissions:1,net:200,exits:1,quantity:1,unmatched:0},{account,contract:'MNQ 2026-12',symbol:'MNQ',day:'2026-10-22',gross:0,commissions:1,net:null,exits:1,quantity:1,unmatched:1,coverageIssues:1}];
  const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.equal((html.match(/class="filled"/g)||[]).length,1);assert.match(html,/Waiting for latest P&amp;L/);
 });
+test('trading inside an observed payout window explains timing uncertainty and retains confirmed later days',()=>{
+ const journal=data();journal.adjustments![0].tradingActivity=true;journal.realizedCheckpoints=[{account,capturedAt:cut,session:'2026-10-22',net:500,afterNet:200}];
+ const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.match(html,/exact time is unknown/);assert.match(html,/Payout timing unknown/);assert.match(html,/Exact day count unavailable/);assert.doesNotMatch(html,/Waiting for latest P&amp;L|Sync pending|Confirm Lucid|save a new|Cycle check needed/);
+});
