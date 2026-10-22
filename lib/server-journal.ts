@@ -9,6 +9,8 @@ import {planFirmPayoutImport,payoutSummary,validateFirmPayout} from './payouts';
 import type {AccountMonitor,AccountState,AccountStateData} from './account-state';
 import {aggregateRealized,realizedEvents,realizedCheckpoint} from './realized';
 import {latestPayoutDeduction} from './lucid-flex';
+import {reportedAccountSessions,reportedCheckpoint} from './account-sessions';
+import type {NativePnlRow} from './account-sessions';
 import type {RealizedDay,RealizedEvent} from './realized';
 import firmNotices from '../data/firm-adjustments.json';
 import {canonicalJson,observation,deriveBalanceAdjustments} from './balance-adjustments';
@@ -87,15 +89,16 @@ export async function saveAccountState(input:unknown){
     statements.push(db().prepare(sql).bind(...rows.flatMap(a=>[a.account,capture.capturedAt,JSON.stringify(a)])));
   }
   let results;try{results=await db().batch(statements);}catch(e){if(String(e).includes('NOT NULL'))throw new Error('Conflicting account snapshot at the same time. Saved observations were not replaced.');throw e;}
+  const pnlChanged=capture.accounts.some(account=>{const old=priorAccounts.get(account.account);return account.values.RealizedProfitLoss&&account.values.RealizedProfitLoss.value!==old?.values.RealizedProfitLoss?.value;});
   const balanceChanged=capture.accounts.some(account=>{const old=priorAccounts.get(account.account);return account.values.CashValue&&account.values.CashValue.value!==old?.values.CashValue?.value;}),availabilityChanged=capture.accounts.some(account=>priorAccounts.get(account.account)?.connected!==account.connected)||raw.some(row=>row.origin==='not-seen');
   const late=!!prior.monitor&&capture.capturedAt<prior.monitor.capturedAt&&results[1].meta.changes>0;
   const newlyArchived=results[1].meta.changes>0;
-  if(newlyArchived&&(balanceChanged||availabilityChanged||late)){await bumpJournalRevision();if(balanceChanged||late)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('last_balance_change',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").bind(receivedAt).run();}
+  if(newlyArchived&&(balanceChanged||pnlChanged||availabilityChanged||late)){await bumpJournalRevision();if(balanceChanged||pnlChanged||late)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('last_balance_change',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").bind(receivedAt).run();}
   const latest=await db().prepare("SELECT captured_at AS capturedAt FROM recorder_status WHERE id='latest'").first<{capturedAt:string}>();
   return {accepted:results[0].meta.changes===1,capturedAt:latest?.capturedAt||capture.capturedAt};
 }
-async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmReferences:FirmReference[]){
- const [pairs,labels,tracking]=await Promise.all([
+async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmReferences:FirmReference[],asOf:number){
+ const [pairs,labels,tracking,nativeRows]=await Promise.all([
   db().prepare(`WITH retained AS (
    SELECT id,account,captured_at,cash_value,json_extract(data,'$.state.values.CashValue.at') AS cash_at,COALESCE(json_extract(data,'$.state.values.RealizedProfitLoss.value'),0) AS realized
    FROM account_observations o WHERE origin<>'legacy' OR NOT EXISTS (SELECT 1 FROM account_observations r WHERE r.account=o.account AND r.captured_at=o.captured_at AND r.origin<>'legacy')
@@ -107,10 +110,11 @@ async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmR
    WHERE adjacent.previous_id IS NOT NULL AND adjacent.cash_value IS NOT NULL AND adjacent.previous_cash IS NOT NULL AND (ABS(adjacent.cash_value-adjacent.previous_cash)>=.001 OR EXISTS(SELECT 1 FROM execution_times e WHERE e.account=adjacent.account AND e.time>adjacent.previous_cash_at AND e.time<=adjacent.cash_at) OR adjacent.realized<>adjacent.previous_realized)`).all<{data:string;previous:string;gap:number;received_at:string;previous_received:string}>(),
   db().prepare('SELECT data FROM balance_adjustment_labels').all<{data:string}>(),
   db().prepare('SELECT COUNT(*) AS observations,MIN(captured_at) AS first,MAX(captured_at) AS last FROM account_observations').first<BalanceTracking>(),
+  db().prepare(`SELECT account,captured_at AS capturedAt,json_extract(data,'$.state.values.RealizedProfitLoss.value') AS net,json_extract(data,'$.state.values.RealizedProfitLoss.at') AS netAt,cash_value AS cash,json_extract(data,'$.state.values.CashValue.at') AS cashAt,json_extract(data,'$.state.connected') AS connected,json_extract(data,'$.state.currency') AS currency,json_extract(data,'$.state.connection') AS connection,json_extract(data,'$.state.provider') AS provider FROM account_observations o WHERE captured_at<=? AND json_extract(data,'$.state.values.RealizedProfitLoss.value') IS NOT NULL AND (origin<>'legacy' OR NOT EXISTS (SELECT 1 FROM account_observations r WHERE r.account=o.account AND r.captured_at=o.captured_at AND r.origin<>'legacy')) ORDER BY account,captured_at`).bind(new Date(asOf).toISOString()).all<NativePnlRow>(),
  ]);
  const intervals:BalanceInterval[]=pairs.results.map(row=>({before:{...JSON.parse(row.previous),receivedAt:row.previous_received},after:{...JSON.parse(row.data),receivedAt:row.received_at},gap:!!row.gap}));
- const events=new Map([...realizedCache].map(([account,cache])=>[account,cache.events]));
- return {adjustments:deriveBalanceAdjustments(intervals,events,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel),Date.now(),KNOWN_FIRM_ADJUSTMENTS,{profiles,firmReferences}),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
+ const events=new Map([...realizedCache].map(([account,cache])=>[account,cache.events])),reported=reportedAccountSessions(nativeRows.results,events,asOf);
+ return {reported,adjustments:deriveBalanceAdjustments(intervals,events,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel),Date.now(),KNOWN_FIRM_ADJUSTMENTS,{profiles,firmReferences,nativeReadings:reported.readings}),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
 }
 export async function saveAdjustmentLabel(input:Record<string,unknown>){
  const id=text(input.id,500),kind=text(input.kind,30);if(!['automatic','payout','firm-adjustment','unexplained','ignore'].includes(kind))throw new Error('Choose a payout, firm adjustment, unexplained change or ignored change.');
@@ -175,11 +179,14 @@ export async function loadJournal():Promise<Journal>{
   const futureTimes=[...realizedCache.values()].flatMap(cache=>cache.nextFutureAt!==undefined?[cache.nextFutureAt]:[]),nextFuture=futureTimes.length?new Date(Math.min(...futureTimes)).toISOString():null;
   if(nextFuture)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('next_future_fill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value").bind(nextFuture).run();
   else await db().prepare("DELETE FROM journal_meta WHERE key='next_future_fill'").run();
-  const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash,ps.results.map(row=>JSON.parse(row.data)as AccountProfile),firmReferences);
+  const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash,ps.results.map(row=>JSON.parse(row.data)as AccountProfile),firmReferences,asOf);
   const resetSources=[...new Set(balanceData.adjustments.map(row=>row.account))].flatMap(account=>{const reset=latestPayoutDeduction(account,balanceData.adjustments,asOf);return reset?[{account,capturedAt:reset.to}]:[];});
   const checkpointSources=[...firmReferences.flatMap(ref=>ref.flex?[{account:ref.account,capturedAt:ref.flex.capturedAt}]:[]),...resetSources];
-  const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=checkpointSources.filter((row,i,all)=>all.findIndex(other=>other.account===row.account&&other.capturedAt===row.capturedAt)===i).map(row=>realizedCheckpoint(row.account,row.capturedAt,realizedCache.get(row.account)?.events||[]));
-  return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,...balanceData,revision:readingVersion.revision,trades:hs.results.flatMap(h=>JSON.parse(h.trades_data)).filter(trade=>Date.parse(trade.exit)<=asOf),accounts:hs.results.map(h=>JSON.parse(h.summary_data)),
+  const uniqueCheckpoints=checkpointSources.filter((row,i,all)=>all.findIndex(other=>other.account===row.account&&other.capturedAt===row.capturedAt)===i);
+  const reportedCheckpoints=uniqueCheckpoints.flatMap(row=>{const point=reportedCheckpoint(row.account,row.capturedAt,balanceData.reported,realizedCache.get(row.account)?.events||[]);return point?[point]:[];});
+  const {reported,...balanceSummary}=balanceData;
+  const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=uniqueCheckpoints.map(row=>realizedCheckpoint(row.account,row.capturedAt,realizedCache.get(row.account)?.events||[]));
+  return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,reportedSessions:reported.sessions,reportedCheckpoints,...balanceSummary,revision:readingVersion.revision,trades:hs.results.flatMap(h=>JSON.parse(h.trades_data)).filter(trade=>Date.parse(trade.exit)<=asOf),accounts:hs.results.map(h=>JSON.parse(h.summary_data)),
     profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash,imports:im.results as unknown as Journal['imports'],lastSaved:last?.updated||'',seedVersion:version?.value||''};
 }
 function text(v:unknown,max=1000){if(typeof v!=='string')throw new Error('A text field is missing.');if(v.length>max)throw new Error('Text is too long.');return v.trim();}

@@ -385,3 +385,20 @@ test('the journal supplies a post-payout execution split without rewriting cash,
   const again=await server.loadJournal();assert.deepEqual(again.cash,cash.cash);assert.deepEqual(again.trades,cash.trades);assert.deepEqual(again.realizedCheckpoints,cash.realizedCheckpoints);assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);
  });
 });
+
+test('funded native progress and payout reconciliation bypass bad execution position metadata without rewriting history',async()=>{
+ await withSettledClock(async()=>{
+  const account='LFF05000000000041',time=(m:number)=>'2026-10-20T18:'+String(m).padStart(2,'0')+':00.000Z';
+  const incoming=[{id:'native-entry',side:'Buy',qty:1,price:100,pos:1,m:0},{id:'native-exit',side:'Sell',qty:1,price:180,pos:0,m:1},{id:'native-stale-position',side:'Buy',qty:5,price:200,pos:7,m:3},{id:'native-partial',side:'Sell',qty:3,price:220,pos:4,m:4}].map(f=>({...f,account,contract:'MNQ 2026-12',time:time(f.m)}));
+  await server.importExecutions({source:'native-cycle-integration',checksum:(++integrationImport).toString(16).padStart(64,'0'),chunk:0,fills:incoming});
+  const snapshot=(m:number,net:number,cash=50000+net)=>{const c=integrationCapture(account,cash,time(m));(c.accounts[0].values as any).RealizedProfitLoss={value:net,at:time(m),source:'PlatformRead'};return c;};
+  await server.saveAccountState(snapshot(2,159));await server.saveAccountState(snapshot(3,156.5));await server.saveAccountState(snapshot(4,275));
+  const raw=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),data=await server.loadJournal();
+  assert.equal(data.adjustments!.some(r=>r.account===account),false);assert.equal(data.reportedSessions!.find(r=>r.account===account)?.net,275);
+  const {accountFlexProgress}=require('../lib/account-display')as typeof import('../lib/account-display');assert.equal(accountFlexProgress(account,data)?.payout.days,1);
+  const revision=await server.loadJournalVersion();await server.saveAccountState(snapshot(5,274,50275));assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
+  await server.saveAccountState(snapshot(6,274,48275));const paid=await server.loadJournal(),reset=paid.adjustments!.find(r=>r.account===account&&r.amount===-2000)!;assert.ok(reset);
+  assert.equal(paid.reportedCheckpoints!.find(r=>r.account===account&&r.capturedAt===time(6))?.afterNet,0);assert.equal(accountFlexProgress(account,paid)?.payout.days,0);
+  assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);assert.deepEqual(paid.cash,data.cash);assert.deepEqual(paid.trades,data.trades);
+ });
+});

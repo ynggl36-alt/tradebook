@@ -1,3 +1,4 @@
+import type {ReportedSession} from './account-sessions';
 import type {FirmReference} from './firm-reference';
 import type {RealizedDay,RealizedCheckpoint} from './realized';
 import type {BalanceAdjustment,BalanceTracking,FirmAdjustmentNotice} from './balance-adjustments';
@@ -35,5 +36,6 @@ export type Journal = {
   lastSaved: string; seedVersion: string; firmReferences?:FirmReference[];
   revision?:string; realized?:RealizedDay[];
   realizedSessions?:RealizedDay[];realizedCheckpoints?:RealizedCheckpoint[];
+  reportedSessions?:ReportedSession[];reportedCheckpoints?:RealizedCheckpoint[];
   adjustments?:BalanceAdjustment[];balanceTracking?:BalanceTracking;firmAdjustments?:FirmAdjustmentNotice[];
 };

@@ -1,5 +1,7 @@
 import type {AccountState} from './account-state';
 import type {AccountProfile,CashRecord} from './types';
+import {reportedTradingDelta} from './account-sessions';
+import type {NativePnlReading} from './account-sessions';
 import type {FirmReference} from './firm-reference';
 import {accountStage} from './lucid-flex';
 import type {RealizedEvent} from './realized';
@@ -48,7 +50,7 @@ function offsetPostingLag(rows:BalanceAdjustment[],endpoints:Map<string,Adjustme
 // Compare automatically recorded balances with saved trading results. Payout
 // classification does not depend on a firm's eligibility rules, split, recorder
 // cadence, flat positions, provenance label or a fixed deduction range.
-export type PayoutDetectionContext={profiles?:AccountProfile[];firmReferences?:FirmReference[]};
+export type PayoutDetectionContext={profiles?:AccountProfile[];firmReferences?:FirmReference[];nativeReadings?:ReadonlyMap<string,NativePnlReading>};
 export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAccount:Map<string,RealizedEvent[]>,cash:CashRecord[],labels:AdjustmentLabel[]=[],now=Date.now(),notices:FirmAdjustmentNotice[]=[],context:PayoutDetectionContext={}):BalanceAdjustment[]{
  const overrides=new Map(labels.map(label=>[label.id,label])),rows:BalanceAdjustment[]=[],endpoints=new Map<string,AdjustmentEndpoints>();
  const profiles=new Map((context.profiles||[]).map(profile=>[profile.account,profile])),references=new Map((context.firmReferences||[]).map(reference=>[reference.account,reference]));
@@ -57,8 +59,8 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
   if(!a||!b||Date.parse(b.at)<=Date.parse(a.at)||left.currency!==right.currency||right.currency!=='USD')continue;
   const from=Date.parse(a.at),to=Date.parse(b.at),events=eventsByAccount.get(after.account);
   const relevant=(events||[]).filter(event=>Date.parse(event.time)>from&&Date.parse(event.time)<=to);
-  const unknown=events===undefined||relevant.some(event=>event.net===null||(event.coverageIssues||0)>0);
-  const tradingNet=unknown?null:round(relevant.reduce((sum,event)=>sum+event.net!,0)),amount=tradingNet===null?null:round(b.value-a.value-tradingNet);
+  const nativeNet=reportedTradingDelta(after.account,a.at,b.at,context.nativeReadings),unknown=nativeNet===null&&(events===undefined||relevant.some(event=>event.net===null||(event.coverageIssues||0)>0));
+  const tradingNet=nativeNet??(unknown?null:round(relevant.reduce((sum,event)=>sum+event.net!,0))),amount=tradingNet===null?null:round(b.value-a.value-tradingNet);
   if(amount!==null&&Math.abs(amount)<.01)continue;
   if(amount===null&&Math.abs(b.value-a.value)<.01)continue;
   const reasons:string[]=[];
