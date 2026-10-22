@@ -419,3 +419,20 @@ test('late native snapshots reconcile a position-metadata disagreement from an e
   assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),original);assert.deepEqual(paid.cash,cashBefore);
  });
 });
+
+test('evaluation breach evidence refreshes on floating loss and survives disappearance without changing source history or manual profiles',async()=>{
+ const account='LFE05000000000991',before=await server.loadJournal(),at='2026-10-22T14:00:00.000Z';
+ const snapshot=(capturedAt:string,cash:number,floating:number,positions:any[]=[])=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFE','LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Synthetic',provider:'Synthetic',values:{CashValue:{value:cash,at:capturedAt,source:'PlatformRead'},UnrealizedProfitLoss:{value:floating,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions}]});
+ await server.saveAccountState(snapshot(at,50000,0));
+ await server.saveProfile({account,label:'Synthetic retained label',stage:'Evaluation',status:'Active',notes:'Preserve this profile'});
+ const profileBefore=(await server.loadJournal()).profiles.find(p=>p.account===account),revision=await server.loadJournalVersion();
+ await server.saveAccountState(snapshot('2026-10-22T14:01:00.000Z',50000,-2001,[{instrument:'MNQ 12-26',side:'Long',quantity:1,averagePrice:30000}]));
+ assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
+ let result=await server.loadJournal(),failure=result.evaluationFailures!.find(p=>p.account===account)!;
+ assert.equal(failure.balance,47999);assert.equal(failure.source,'cash-and-floating');assert.equal(failure.floor,48000);
+ const replay=await server.loadJournalVersion();await server.saveAccountState(snapshot('2026-10-22T14:01:00.000Z',50000,-2001,[{instrument:'MNQ 12-26',side:'Long',quantity:1,averagePrice:30000}]));assert.equal((await server.loadJournalVersion()).revision,replay.revision);
+ await server.saveAccountState({...snapshot('2026-10-22T14:02:00.000Z',50000,0),accounts:[]});
+ result=await server.loadJournal();assert.deepEqual(result.evaluationFailures!.find(p=>p.account===account),failure);
+ assert.deepEqual(result.profiles.find(p=>p.account===account),profileBefore);assert.deepEqual(result.trades,before.trades);assert.deepEqual(result.cash,before.cash);assert.deepEqual(result.notes,before.notes);
+ const backup=JSON.parse(await(await server.backupResponse()).text());assert.ok(backup.balanceObservations.some((o:any)=>o.account===account&&o.state.values.UnrealizedProfitLoss?.value===-2001));
+});
