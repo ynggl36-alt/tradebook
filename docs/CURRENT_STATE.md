@@ -3,6 +3,8 @@
 
 ## Baseline
 
+- Current Accounts automatically excludes recognized Lucid Flex 50K evaluations with a recorded loss-limit breach. The $2,000 EOD trailing floor starts at $48,000 and caps at $50,100; only completed sessions advance it. Actual fresh cash anchors and clean account-wide execution deltas reconstruct session closes; missing costs/inventory or contradictory cash intervals cannot manufacture a higher floor. Direct breach evidence uses flat cash, synchronized cash plus floating P&L, or supported positive net liquidation. Immutable observations preserve a past breach through later higher readings or disappearance. Existing manual terminal statuses and explicit stage overrides remain intact. Include archived labels reveals the failed card and dated value/floor evidence; the account archive shows Failed. Trades, Calendar/Analysis, profiles, payouts and raw records are unchanged. Equity-only changes within the risk band refresh the saved-data revision. No recorder, schema or trading-permission checks.
+
 - Initial shared source prepared on 2026-10-19 from the owner's working Tradebook Site.
 - Five primary sections: Accounts, Calendar, Analysis, Payouts & costs, Settings.
 - Native balances and P&L remain prominent. Dated firm figures and execution-derived estimates remain separately labeled.
@@ -32,6 +34,8 @@
 - Neither session has an exclusive GitHub identity when both use the owner's connected account. No automatic deployment or protected-branch enforcement is assumed.
 
 ## Work queue
+
+Owner task (2026-10-22), branch `agent/owner/eval-failure-20261022`, issue #25: automatically hide breached evaluations using existing saved data after cancelling the standalone diagnostic. Owns `lib/evaluation-failures.ts`, compact observation loading/refresh, derived Journal evidence, Current Accounts/archive status display, maintenance verification, synthetic helper/storage/render regressions and this document. No competing code PR at task start; #22 remains documentation-only. Derived failure is separate from AccountProfile and never deletes or rewrites source records. Current scope is the confirmed Lucid Flex 50K evaluation family; other firms and funded accounts do not inherit these rules.
 
 Owner task (2026-10-21), branch `agent/owner/calibration-refinement-20261021`: refine the October 7–20 entry pilot after owner feedback. Owns 5m/15m geometry, per-edge prominence/coverage, causal role reversals, stricter observed-interaction counts, shared 35-day price context/range helpers, worker/panel/chart/evidence integration and synthetic regressions. One-minute prices retain timing only. The original C1–C15 mapping and corrected feedback are frozen privately; new R labels identify the revised outcome-blind selection, not the old cases or independent validation. No accounting, raw history, review tags, recorder or schema writes.
 

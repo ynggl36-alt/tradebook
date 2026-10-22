@@ -2,6 +2,7 @@ import type {ReportedSession} from './account-sessions';
 import type {FirmReference} from './firm-reference';
 import type {RealizedDay,RealizedCheckpoint} from './realized';
 import type {BalanceAdjustment,BalanceTracking,FirmAdjustmentNotice} from './balance-adjustments';
+import type {EvaluationFailure} from './evaluation-failures';
 export type Fill = {
   id: string; contract: string; symbol: string; pv: number; time: string;
   ordinal: number; side: 'Buy' | 'Sell'; qty: number; price: number;
@@ -38,4 +39,5 @@ export type Journal = {
   realizedSessions?:RealizedDay[];realizedCheckpoints?:RealizedCheckpoint[];
   reportedSessions?:ReportedSession[];reportedCheckpoints?:RealizedCheckpoint[];
   adjustments?:BalanceAdjustment[];balanceTracking?:BalanceTracking;firmAdjustments?:FirmAdjustmentNotice[];
+  evaluationFailures?:EvaluationFailure[];
 };
