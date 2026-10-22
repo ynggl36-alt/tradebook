@@ -1,10 +1,11 @@
 import type {PriceBar} from './recorder';
 import {centralDay} from './analytics';
 import type {TrendAttribution} from './trendline-attribution';
+import type {PriceContextMatch} from './price-context';
 
 // Fixed before inspecting trading outcomes. This version is deliberately a
 // continuous-session pilot: missing minutes and market closures split geometry.
-export const TREND_VERSION='trendline-pilot-v1';
+export const TREND_VERSION='trendline-calibration-v2';
 export const TREND_START='2026-10-07',TREND_END='2026-10-20';
 export const TREND_START_AT=Date.parse('2026-10-07T00:00:00-05:00');
 export const TREND_END_AT=Date.parse('2026-10-21T00:00:00-05:00');
@@ -16,12 +17,13 @@ export type Polarity='support'|'resistance';
 export type TrendCandle={start:number;end:number;open:number;high:number;low:number;close:number;segment:number;atr:number|null;impulse:boolean};
 export type TrendStream={minutes:number;bars:TrendCandle[]};
 export type PreparedTrends={contract:string;streams:TrendStream[];minuteBars:TrendCandle[]};
-export type TrendAnchor={time:number;price:number;edge:Edge;impulse:boolean;availableAt:number};
-export type TrendLine={id:string;family:string;minutes:number;polarity:Polarity;style:TrendStyle;a:TrendAnchor;b:TrendAnchor;availableAt:number;asOf:number;value:number;slope:number;touches:number;wickTouches:number;bodyTouches:number;broken:boolean;score:number;segmentStart:number;segmentEnd:number};
+export type TrendAnchor={time:number;price:number;edge:Edge;impulse:boolean;availableAt:number;prominent?:boolean};
+export type TrendFlip={from:Polarity;formationAt:number;breakAt:number;retestAt:number;confirmedAt:number};
+export type TrendLine={id:string;family:string;minutes:number;polarity:Polarity;style:TrendStyle;a:TrendAnchor;b:TrendAnchor;availableAt:number;asOf:number;value:number;slope:number;touches:number;wickTouches:number;bodyTouches:number;broken:boolean;score:number;segmentStart:number;segmentEnd:number;structureValid?:boolean;structureAt?:number;structureBasis?:'two-prominent'|'impulse-continuation'|'tested-continuation'|'exploratory';flip?:TrendFlip};
 export type PairCheck={id:string;impulse:boolean;wick:TrendLine;body:TrendLine;bothEligible:boolean};
-export type TrendSnapshot={version:string;contract:string;asOf:number;status:'measured'|'insufficient-prices';atr:number|null;tolerance:number|null;minutesCovered:number;segmentStart:number|null;anchors:number;pairs:number;variants:number;intact:number;confirmed:number;truncated:boolean;lines:TrendLine[]};
+export type TrendSnapshot={version:string;contract:string;asOf:number;status:'measured'|'insufficient-prices';atr:number|null;tolerance:number|null;minutesCovered:number;segmentStart:number|null;anchors:number;pairs:number;variants:number;intact:number;confirmed:number;truncated:boolean;lines:TrendLine[];flips?:number;geometry?:{minutes:number;bars:number;available:boolean}[]};
 export type TrendEntry={id:string;account:string;contract:string;entry:string;entryPrice:number|null;gross:number;net:number|null;dir?:'Long'|'Short'};
-export type TrendEntryResult=TrendEntry&{attribution?:TrendAttribution;status:'measured'|'insufficient-prices'|'missing-entry-fill';group:'body-only'|'wick-only'|'both'|'neither'|'unknown';mixed:boolean;impulse:boolean;confirmedNear:number;candidateNear:number;nearest:number|null;lineIds:string[];snapshot:Omit<TrendSnapshot,'lines'>};
+export type TrendEntryResult=TrendEntry&{attribution?:TrendAttribution;weeklyContext?:{known:number;unavailable:number;tags:('near-edge'|'near-midpoint'|'inside-zone')[];nearest:{source:string;price:number;distance:number}|null};priceContext?:(PriceContextMatch&{sources:number;completeSources:number;lookbackStart:number});status:'measured'|'insufficient-prices'|'missing-entry-fill';group:'body-only'|'wick-only'|'both'|'neither'|'unknown';mixed:boolean;impulse:boolean;confirmedNear:number;candidateNear:number;nearest:number|null;lineIds:string[];snapshot:Omit<TrendSnapshot,'lines'>};
 export type ReactionCheck={id:string;impulse:boolean;status:'complete'|'incomplete'|'baseline-ineligible';body:boolean;wick:boolean;end:number};
 export type ReactionSummary={complete:number;incomplete:number;baselineIneligible:number;bodyOnly:number;wickOnly:number;both:number;neither:number;impulse:{complete:number;bodyOnly:number;wickOnly:number;both:number;neither:number}};
 const MINUTE=60000,MAX_ANCHORS=28,MAX_PAIRS=160,RIGHT=2,LEFT=2;
@@ -63,11 +65,11 @@ export function prepareTrends(input:PriceBar[],contract:string):PreparedTrends{
   return {contract,streams,minuteBars:streams[0].bars};
 }
 function upperBound(bars:TrendCandle[],end:number){let lo=0,hi=bars.length;while(lo<hi){const mid=(lo+hi)>>>1;if(bars[mid].end<=end)lo=mid+1;else hi=mid;}return lo;}
-type Event={index:number;availableAt:number;impulse:boolean};
+type Event={index:number;availableAt:number;impulse:boolean;prominent:Record<Edge,boolean>;localPivot:boolean};
 function anchorEvents(bars:TrendCandle[],first:number,last:number,polarity:Polarity):Event[]{
   const events:Event[]=[];
   for(let i=first;i<=last;i++){
-    const b=bars[i];let pivot=false;
+    const b=bars[i];let localPivot=false;const prominent={wick:false,body:false};
     if(i>=first+LEFT&&i+RIGHT<=last){
       for(const edge of ['wick','body'] as const){
         const p=edgePrice(b,polarity,edge);let yes=true;
@@ -76,10 +78,15 @@ function anchorEvents(bars:TrendCandle[],first:number,last:number,polarity:Polar
           if(j===i)continue;const q=edgePrice(bars[j],polarity,edge),better=polarity==='support'?p<q:p>q;
           if(!(better||(p===q&&j<i))){yes=false;break;}
         }
-        if(yes){pivot=true;break;}
+        if(yes){
+          localPivot=true;
+          const excursion=(other:TrendCandle)=>polarity==='support'?edgePrice(other,polarity,edge)-p:p-edgePrice(other,polarity,edge);
+          const left=Math.max(...bars.slice(i-LEFT,i).map(excursion)),right=Math.max(...bars.slice(i+1,i+RIGHT+1).map(excursion));
+          if(b.atr!==null&&Math.min(left,right)>=Math.max(1,.25*b.atr)){prominent[edge]=true;}
+        }
       }
     }
-    if(b.impulse||pivot)events.push({index:i,availableAt:b.impulse?b.end:bars[i+RIGHT].end,impulse:b.impulse});
+    if(b.impulse||localPivot)events.push({index:i,availableAt:b.impulse?b.end:bars[i+RIGHT].end,impulse:b.impulse,prominent,localPivot});
   }
   return events;
 }
@@ -88,47 +95,96 @@ function contacts(b:TrendCandle,value:number,p:Polarity,tol:number){
   return {wick:Math.abs(edgePrice(b,p,'wick')-value)<=tol,body:Math.abs(edgePrice(b,p,'body')-value)<=tol};
 }
 function breached(b:TrendCandle,value:number,p:Polarity,tol:number){return p==='support'?b.close<value-tol:b.close>value+tol;}
-function scoreLine(bars:TrendCandle[],minutes:number,polarity:Polarity,a:Event,b:Event,ae:Edge,be:Edge,last:number,asOf:number,contract:string):TrendLine{
+// One causal role reversal, within observed continuous-session prices. The
+// original anchors/tests never validate the new side. A completed break needs
+// a later retest and a separate close away; entry-minute data is unavailable.
+export function completedRoleReversal(line:TrendLine,bars:TrendCandle[],broken:number,last:number):TrendLine|null{
+  if(!line.structureValid||line.touches===0||bars[broken].start<line.availableAt)return null;
+  const polarity:Polarity=line.polarity==='support'?'resistance':'support';
+  for(let contact=broken+1;contact<last;contact++){
+    const candle=bars[contact],value=trendValueAt(line,center(candle)),tol=tolerance(candle);
+    if(breached(candle,value,polarity,tol))return null;
+    const hit=contacts(candle,value,polarity,tol);
+    if(!(hit.wick||hit.body)||Math.abs(line.slope*(candle.end-candle.start))>tol)continue;
+    for(let close=contact+1;close<=Math.min(last,contact+3);close++){
+      const next=bars[close],projected=trendValueAt(line,center(next));
+      if(breached(next,projected,polarity,tolerance(next)))return null;
+      const away=polarity==='support'?next.close-projected:projected-next.close;
+      if(away<Math.max(1,.25*(candle.atr??0)))continue;
+      const flip:TrendFlip={from:line.polarity,formationAt:line.availableAt,breakAt:bars[broken].end,retestAt:candle.start,confirmedAt:next.end};
+      const result:TrendLine={...line,id:line.id+'|flip@'+next.end,family:line.family+'|flip',polarity,availableAt:next.end,structureAt:next.end,broken:false,touches:0,wickTouches:0,bodyTouches:0,flip};
+      let touchAt=contact,wickAt=contact,bodyAt=contact;
+      for(let i=contact+1;i<=close;i++){
+        const b=bars[i],h=contacts(b,trendValueAt(result,center(b)),polarity,tolerance(b));
+        if(h.wick||h.body)touchAt=i;if(h.wick)wickAt=i;if(h.body)bodyAt=i;
+      }
+      for(let i=close+1;i<=last;i++){
+        const b=bars[i],v=trendValueAt(result,center(b));if(breached(b,v,polarity,tolerance(b)))return null;
+        if(Math.abs(line.slope*(b.end-b.start))>tolerance(b))continue;const h=contacts(b,v,polarity,tolerance(b));
+        if(h.wick||h.body){if(i-touchAt>=3)result.touches++;touchAt=i;}
+        if(h.wick){if(i-wickAt>=3)result.wickTouches++;wickAt=i;}
+        if(h.body){if(i-bodyAt>=3)result.bodyTouches++;bodyAt=i;}
+      }
+      return result;
+    }
+  }
+  return null;
+}
+function scoreLine(bars:TrendCandle[],minutes:number,polarity:Polarity,a:Event,b:Event,ae:Edge,be:Edge,last:number,asOf:number,contract:string):{line:TrendLine;flip:TrendLine|null}{
   const ca=bars[a.index],cb=bars[b.index],availableAt=Math.max(a.availableAt,b.availableAt);
   const family=[contract,minutes,polarity,ca.start,cb.start].join('|');
-  const line:TrendLine={id:family+'|'+ae+'-'+be,family,minutes,polarity,style:ae===be?ae:'mixed',a:{time:center(ca),price:edgePrice(ca,polarity,ae),edge:ae,impulse:a.impulse,availableAt:a.availableAt},b:{time:center(cb),price:edgePrice(cb,polarity,be),edge:be,impulse:b.impulse,availableAt:b.availableAt},availableAt,asOf,value:0,slope:0,touches:0,wickTouches:0,bodyTouches:0,broken:false,score:0,segmentStart:bars[a.index].start,segmentEnd:bars[last].end};
+  const line:TrendLine={id:family+'|'+ae+'-'+be,family,minutes,polarity,style:ae===be?ae:'mixed',a:{time:center(ca),price:edgePrice(ca,polarity,ae),edge:ae,impulse:a.impulse,availableAt:a.availableAt,prominent:a.prominent[ae]},b:{time:center(cb),price:edgePrice(cb,polarity,be),edge:be,impulse:b.impulse,availableAt:b.availableAt,prominent:b.prominent[be]},availableAt,asOf,value:0,slope:0,touches:0,wickTouches:0,bodyTouches:0,broken:false,score:0,segmentStart:bars[a.index].start,segmentEnd:bars[last].end,structureValid:false,structureBasis:'exploratory'};
   line.slope=(line.b.price-line.a.price)/(line.b.time-line.a.time);line.value=trendValueAt(line,asOf);
-  if(!Number.isFinite(line.slope)||!Number.isFinite(line.value)){line.broken=true;return line;}
-  let lastTouch=-100,lastWick=-100,lastBody=-100;
+  if(!Number.isFinite(line.slope)||!Number.isFinite(line.value)){line.broken=true;return {line,flip:null};}
+  let lastTouch=b.index,lastWick=b.index,lastBody=b.index,broken=-1;const testEnds:number[]=[];
   for(let i=a.index+1;i<=last;i++){
     if(i===b.index)continue;const candle=bars[i],value=trendValueAt(line,center(candle)),tol=tolerance(candle);
-    if(!Number.isFinite(value)||breached(candle,value,polarity,tol)){line.broken=true;break;}
-    // Anchor candles and their confirmation window cannot be a third touch.
-    if(candle.start<availableAt)continue;
+    if(!Number.isFinite(value)||breached(candle,value,polarity,tol)){line.broken=true;broken=i;break;}
+    // Seed the B contact episode before counting later tests. Contacts during
+    // confirmation extend that episode even though they cannot validate it.
+    if(i<b.index||Math.abs(line.slope*(candle.end-candle.start))>tol)continue;
     const touch=contacts(candle,value,polarity,tol);
-    if(touch.wick||touch.body){if(i-lastTouch>=3)line.touches++;lastTouch=i;}
-    if(touch.wick){if(i-lastWick>=3)line.wickTouches++;lastWick=i;}
-    if(touch.body){if(i-lastBody>=3)line.bodyTouches++;lastBody=i;}
+    if(touch.wick||touch.body){if(candle.start>=availableAt&&i-lastTouch>=3){line.touches++;testEnds.push(candle.end);}lastTouch=i;}
+    if(touch.wick){if(candle.start>=availableAt&&i-lastWick>=3)line.wickTouches++;lastWick=i;}
+    if(touch.body){if(candle.start>=availableAt&&i-lastBody>=3)line.bodyTouches++;lastBody=i;}
   }
   // Pure pre-entry geometry. Entry price, trade direction and outcomes never
   // enter this score. A pair itself supplies zero independent confirmations.
-  line.score=Math.min(line.touches,8)*4+Math.log2(1+b.index-a.index)+Math.max(0,1-(last-b.index)/Math.max(1,last-a.index));
-  return line;
+  // A prominent origin can use an impulse continuation, or a secondary shared
+  // pivot whose actual edge has at least two independent later confirmations.
+  // Keep each edge's own prominence visible; tests never certify it as a pivot.
+  if(a.prominent[ae]){
+    if(b.impulse){line.structureValid=true;line.structureBasis='impulse-continuation';line.structureAt=availableAt;}
+    else if(b.prominent[be]){line.structureValid=true;line.structureBasis='two-prominent';line.structureAt=availableAt;}
+    else if(b.localPivot&&line.touches>=2){line.structureValid=true;line.structureBasis='tested-continuation';line.structureAt=testEnds[1];}
+  }
+  const flipped=broken>=0?completedRoleReversal(line,bars,broken,last):null;
+  if(flipped)flipped.score=1000+Math.min(flipped.touches,8)*4+Math.log2(1+b.index-a.index);
+  line.score=Number(line.structureValid)*1000+Math.min(line.touches,8)*4+Math.log2(1+b.index-a.index)+Math.max(0,1-(last-b.index)/Math.max(1,last-a.index));
+  return {line,flip:flipped};
 }
 export function scanTrends(prepared:PreparedTrends,entryAt:number):{snapshot:TrendSnapshot;pairs:PairCheck[]}{
   const asOf=Math.floor(entryAt/MINUTE)*MINUTE;
-  const snapshot:TrendSnapshot={version:TREND_VERSION,contract:prepared.contract,asOf,status:'insufficient-prices',atr:null,tolerance:null,minutesCovered:0,segmentStart:null,anchors:0,pairs:0,variants:0,intact:0,confirmed:0,truncated:false,lines:[]};
+  const snapshot:TrendSnapshot={version:TREND_VERSION,contract:prepared.contract,asOf,status:'insufficient-prices',atr:null,tolerance:null,minutesCovered:0,segmentStart:null,anchors:0,pairs:0,variants:0,intact:0,confirmed:0,truncated:false,lines:[],geometry:[5,15].map(minutes=>({minutes,bars:0,available:false}))};
   const end=upperBound(prepared.minuteBars,asOf),recent=prepared.minuteBars.slice(Math.max(0,end-20),end);
   if(recent.length!==20||recent.at(-1)!.end!==asOf||recent[0].segment!==recent.at(-1)!.segment)return {snapshot,pairs:[]};
   const atrBars=recent.slice(-15);let totalRange=0;
   for(let i=1;i<atrBars.length;i++)totalRange+=Math.max(atrBars[i].high-atrBars[i].low,Math.abs(atrBars[i].high-atrBars[i-1].close),Math.abs(atrBars[i].low-atrBars[i-1].close));
   snapshot.atr=totalRange/14;if(!Number.isFinite(snapshot.atr)){snapshot.atr=null;return {snapshot,pairs:[]};}
-  snapshot.status='measured';snapshot.tolerance=Math.max(1,.25*snapshot.atr);
-  const all:TrendLine[]=[],checks:PairCheck[]=[];
+  let minuteFirst=end-1;while(minuteFirst>0&&prepared.minuteBars[minuteFirst-1].segment===recent[0].segment)minuteFirst--;
+  snapshot.tolerance=Math.max(1,.25*snapshot.atr);snapshot.minutesCovered=end-minuteFirst;snapshot.segmentStart=prepared.minuteBars[minuteFirst].start;
+  const all:TrendLine[]=[],flips:TrendLine[]=[],checks:PairCheck[]=[];
   for(const stream of prepared.streams){
-    const {bars,minutes}=stream,last=upperBound(bars,asOf)-1;if(last<0)continue;
+    const {bars,minutes}=stream,last=upperBound(bars,asOf)-1;if(last<0||minutes===1)continue;
     // Do not project from a session which has already closed, or from an
     // incomplete latest bucket caused by a missing minute.
     if(asOf-bars[last].end>=minutes*MINUTE)continue;
     let first=last;while(first>0&&bars[first-1].segment===bars[last].segment&&last-first+1<720)first--;
     if(first>0&&bars[first-1].segment===bars[last].segment)snapshot.truncated=true;
-    if(minutes===1){snapshot.minutesCovered=last-first+1;snapshot.segmentStart=bars[first].start;}
+    const coverage=snapshot.geometry!.find(g=>g.minutes===minutes)!;coverage.bars=last-first+1;coverage.available=last-first>=18;
+    if(bars[first].start<snapshot.segmentStart!)snapshot.segmentStart=bars[first].start;
     if(last-first<18)continue;
+    snapshot.status='measured';
     for(const polarity of ['support','resistance'] as const){
       const found=anchorEvents(bars,first,last,polarity);
       snapshot.anchors+=found.length;if(found.length>MAX_ANCHORS)snapshot.truncated=true;
@@ -140,24 +196,26 @@ export function scanTrends(prepared:PreparedTrends,entryAt:number):{snapshot:Tre
       families.sort((x,y)=>y.b.index-x.b.index||(y.b.index-y.a.index)-(x.b.index-x.a.index)||x.a.index-y.a.index);
       if(families.length>MAX_PAIRS)snapshot.truncated=true;
       for(const {a,b} of families.slice(0,MAX_PAIRS)){
-        const variants=(['wick','body'] as const).flatMap(ae=>(['wick','body'] as const).map(be=>scoreLine(bars,minutes,polarity,a,b,ae,be,last,asOf,prepared.contract)));
+        const scored=(['wick','body'] as const).flatMap(ae=>(['wick','body'] as const).map(be=>scoreLine(bars,minutes,polarity,a,b,ae,be,last,asOf,prepared.contract))),variants=scored.map(s=>s.line);
+        flips.push(...scored.flatMap(s=>s.flip?[s.flip]:[]));
         all.push(...variants);snapshot.pairs++;
         const wick=variants[0],body=variants[3];
         checks.push({id:wick.family,impulse:a.impulse||b.impulse,wick,body,bothEligible:!wick.broken&&!body.broken});
       }
     }
   }
-  snapshot.variants=all.length;snapshot.intact=all.filter(l=>!l.broken).length;snapshot.confirmed=all.filter(l=>!l.broken&&l.touches>0).length;
+  snapshot.variants=all.length;snapshot.intact=all.filter(l=>!l.broken).length;snapshot.confirmed=all.filter(l=>!l.broken&&l.structureValid&&l.touches>0).length;
+  snapshot.flips=flips.length;all.push(...flips);snapshot.intact+=flips.length;snapshot.confirmed+=flips.filter(l=>l.touches>0).length;
   // Select without entry proximity. Coincident styles retain their masks for
   // measurement, while the chart may collapse coincident paths for readability.
-  for(const style of TREND_STYLES)snapshot.lines.push(...all.filter(l=>!l.broken&&l.style===style).sort((a,b)=>Number(b.touches>0)-Number(a.touches>0)||b.score-a.score||a.id.localeCompare(b.id)).slice(0,2));
+  for(const style of TREND_STYLES)snapshot.lines.push(...all.filter(l=>!l.broken&&l.style===style).sort((a,b)=>Number(b.structureValid)-Number(a.structureValid)||Number(b.touches>0)-Number(a.touches>0)||b.score-a.score||a.id.localeCompare(b.id)).slice(0,2));
   return {snapshot,pairs:checks};
 }
 export function measureTrendEntry(entry:TrendEntry,snapshot:TrendSnapshot):TrendEntryResult{
   const {lines,...metadata}=snapshot;
   const row:TrendEntryResult={...entry,status:entry.entryPrice===null?'missing-entry-fill':snapshot.status,group:'unknown',mixed:false,impulse:false,confirmedNear:0,candidateNear:0,nearest:null,lineIds:[],snapshot:metadata};
   if(row.status!=='measured'||entry.entryPrice===null)return row;
-  const candidates=lines.filter(l=>Math.abs(trendValueAt(l,Date.parse(entry.entry))-entry.entryPrice!)<=snapshot.tolerance!),near=candidates.filter(l=>l.touches>0);
+  const candidates=lines.filter(l=>Math.abs(trendValueAt(l,Date.parse(entry.entry))-entry.entryPrice!)<=snapshot.tolerance!),near=candidates.filter(l=>l.structureValid!==false&&l.touches>0);
   const body=near.some(l=>l.style==='body'),wick=near.some(l=>l.style==='wick');
   row.group=body?(wick?'both':'body-only'):(wick?'wick-only':'neither');row.mixed=near.some(l=>l.style==='mixed');row.impulse=near.some(l=>l.a.impulse||l.b.impulse);
   row.confirmedNear=near.length;row.candidateNear=candidates.length;row.lineIds=near.map(l=>l.id);

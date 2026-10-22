@@ -419,3 +419,5 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .calendar-accounts-table small { margin-top:5px; font-size:10px; line-height:1.5; }
 .calendar-account-link { text-align:left; font-weight:600; }
 .calendar-balance { min-width:145px; font-variant-numeric:tabular-nums; }
+
+.entry-price-context{display:block;max-width:240px}.entry-price-context small{display:block;white-space:normal;line-height:1.45}.entry-price-context small+small{margin-top:3px}
