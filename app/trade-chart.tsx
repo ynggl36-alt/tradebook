@@ -48,7 +48,7 @@ export function TradePriceChart({trade,fills,loading,onConnect}:{trade:Trade;fil
   const pilot=inTrendPilot(trade.entry),firstFill=firstEntryFill(trade,fills);
   const plotId='price-plot-'+useId().replace(/[^a-z0-9]/gi,'');
   const svg=useRef<SVGSVGElement>(null);
-  const selectedLines=useMemo(()=>chartTrendLines(trend?.lines??[],trade.contract,Date.parse(trade.entry),firstFill?.price??null,trend?.tolerance??null,highlight??attribution?.match?.lineId??null),[trend,trade.contract,trade.entry,firstFill?.price,highlight,attribution]);
+  const selectedLines=useMemo(()=>chartTrendLines(trend?.lines??[],trade.contract,Date.parse(trade.entry),firstFill?.price??null,trend?.tolerance??null,attribution?.match?.lineId??null),[trend,trade.contract,trade.entry,firstFill?.price,attribution]);
   const anchorStart=selectedLines.length?Math.min(...selectedLines.map(l=>l.a.time)):undefined;
   const range=useMemo(()=>chartRange(trade,kind,anchorStart),[trade.entry,trade.exit,kind,anchorStart]);
   const gapAsOf=Date.parse(trade.entry);
