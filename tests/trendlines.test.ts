@@ -6,6 +6,7 @@ import type {PairCheck,TrendEntry,TrendLine,TrendSnapshot} from '../lib/trendlin
 import {runTrendJob} from '../lib/trendline-runner';
 const start=Date.parse('2026-10-19T12:00:00Z'),contract='NQ 2026-12';
 function candle(i:number,open:number,high:number,low:number,close:number):PriceBar{return {id:contract+'|'+(start+i*60000),contract,start:start+i*60000,end:start+(i+1)*60000,open,high,low,close,volume:10,capturedAt:start+(i+1)*60000+10000000};}
+function expandFive(prices:PriceBar[]){return prices.flatMap((b,i)=>Array.from({length:5},(_,j)=>candle(i*5+j,b.open,b.high,b.low,b.close)));}
 function waves(n=240){return Array.from({length:n},(_,i)=>{const level=1000+i*.2+Math.sin(i*Math.PI/10)*4;return candle(i,level,level+1.5,level-1.5,level+.5);});}
 const entry=(at=start+180*60000):TrendEntry=>({id:'synthetic-entry',account:'TEST',contract,entry:new Date(at+15000).toISOString(),entryPrice:1035,gross:100,net:95});
 
@@ -65,8 +66,8 @@ test('shared pairs receive WW/BB and mixed variants before bounded geometry-only
 });
 
 test('two-anchor geometry is not an independent touch and coincident styles never double count trades',()=>{
-  const result=scanTrends(prepareTrends(waves(80),contract),start+80*60000);
-  const line=result.pairs.find(p=>!p.wick.broken)?.wick;assert.ok(line);
+  const result=scanTrends(prepareTrends(waves(200),contract),start+200*60000);
+  const line=result.pairs.find(p=>!p.wick.broken&&p.wick.structureValid)?.wick;assert.ok(line);
   const base:TrendSnapshot={...result.snapshot,lines:[{...line,style:'wick',touches:0},{...line,id:line.id+'body',style:'body',touches:0}]};
   const e={...entry(),entryPrice:trendValueAt(line,Date.parse(entry().entry))};
   assert.equal(measureTrendEntry(e,base).group,'neither');assert.equal(measureTrendEntry(e,base).candidateNear,2);
@@ -112,8 +113,8 @@ test('finite but extreme OHLC cannot overflow into a measured infinite tolerance
 });
 
 test('non-impulse swing anchors become eligible exactly after two later complete candles',()=>{
-  const prices=Array.from({length:80},(_,i)=>{const level=1000+Math.cos(i*Math.PI/10)*4;return candle(i,level,level+1,level-1,level);});
-  const at=start+53*60000,prepared=prepareTrends(prices,contract),anchorTime=start+50.5*60000;
+  const prices=Array.from({length:80},(_,i)=>{const level=1000+Math.cos(i*Math.PI/10)*20;return candle(i,level,level+1,level-1,level);});
+  const at=start+53*5*60000,prepared=prepareTrends(expandFive(prices),contract),anchorTime=start+50.5*5*60000;
   const before=scanTrends(prepared,at-1),after=scanTrends(prepared,at);
   const has=(r:ReturnType<typeof scanTrends>)=>r.pairs.some(p=>p.wick.a.time===anchorTime||p.wick.b.time===anchorTime);
   assert.equal(has(before),false);assert.equal(has(after),true);
@@ -121,14 +122,17 @@ test('non-impulse swing anchors become eligible exactly after two later complete
 });
 
 test('adjacent contact bars form one episode and a pre-entry close breach stays broken',()=>{
-  const prices=Array.from({length:110},(_,i)=>candle(i,102,103,100,102));
+  const prices=Array.from({length:110},(_,i)=>candle(i,101.5,102,100,101.5));
   // Distinct support pivots at 20 and 40. Later repeated contact bars should
-  // produce one continuous episode rather than a confirmation on every candle.
-  prices[20]=candle(20,102,103,99,102);prices[40]=candle(40,102,103,99,102);
-  const prepared=prepareTrends(prices,contract),scan=scanTrends(prepared,start+90*60000);
-  const family=scan.pairs.find(p=>p.wick.minutes===1&&p.wick.polarity==='support'&&p.wick.a.time===start+20.5*60000&&p.wick.b.time===start+40.5*60000);
-  assert.ok(family);assert.equal(family.wick.touches,1);
-  prices[70]=candle(70,96,103,95,96);const broken=scanTrends(prepareTrends(prices,contract),start+90*60000).pairs.find(p=>p.id===family.id);
+  // remain the B anchor episode rather than supply independent confirmations.
+  prices[20]=candle(20,101.5,102,99,101.5);prices[40]=candle(40,101.5,102,99,101.5);
+  const prepared=prepareTrends(expandFive(prices),contract),scan=scanTrends(prepared,start+90*5*60000);
+  const family=scan.pairs.find(p=>p.wick.minutes===5&&p.wick.polarity==='support'&&p.wick.a.time===start+20.5*5*60000&&p.wick.b.time===start+40.5*5*60000);
+  assert.ok(family);assert.equal(family.wick.touches,0);
+  for(const i of [60,61])prices[i]=candle(i,103,104,102,103);
+  const returned=scanTrends(prepareTrends(expandFive(prices),contract),start+90*5*60000).pairs.find(p=>p.id===family.id)!;
+  assert.equal(returned.wick.touches,1);
+  prices[70]=candle(70,96,103,95,96);const broken=scanTrends(prepareTrends(expandFive(prices),contract),start+90*5*60000).pairs.find(p=>p.id===family.id);
   assert.ok(broken);assert.equal(broken.wick.broken,true);assert.equal(broken.body.broken,true);
 });
 
@@ -167,7 +171,8 @@ test('entry ATR includes the final completed pre-entry candle while impulse ATR 
   assert.equal(prepared.minuteBars[49].atr,2);assert.equal(snapshot.atr,46/14);
 });
 
-test('the history window is exactly 720 bars and flags its bound even without anchor candidates',()=>{
-  const prices=Array.from({length:900},(_,i)=>candle(i,100,100,100,100)),scan=scanTrends(prepareTrends(prices,contract),start+900*60000);
-  assert.equal(scan.snapshot.minutesCovered,720);assert.equal(scan.snapshot.truncated,true);
+test('only the higher-timeframe geometry cap marks a bounded search; 1m timing history stays complete',()=>{
+  const prices=Array.from({length:4500},(_,i)=>candle(i,100,100,100,100)),scan=scanTrends(prepareTrends(prices,contract),start+4500*60000);
+  assert.equal(scan.snapshot.minutesCovered,4500);assert.equal(scan.snapshot.geometry!.find(g=>g.minutes===5)!.bars,720);assert.equal(scan.snapshot.truncated,true);
+  const shorter=scanTrends(prepareTrends(prices.slice(0,900),contract),start+900*60000);assert.equal(shorter.snapshot.truncated,false);
 });

@@ -17,7 +17,7 @@ function fixture(style:EntryStyle,resistance=false,prior=true){
   const entryPrice=style==='anticipatory'?100.8:style==='contact'?100.2:101.4;
   if(resistance)for(let i=0;i<prices.length;i++){const b=prices[i];prices[i]={...b,open:200-b.open,high:200-b.low,low:200-b.high,close:200-b.close};}
   const prepared=prepareTrends(prices,contract),at=start+100*M,base=scanTrends(prepared,at).snapshot;
-  const line:TrendLine={id:contract+'|fixture|wick',family:contract+'|fixture',minutes:1,polarity:resistance?'resistance':'support',style:'wick',a:{time:start+10.5*M,price:100,edge:'wick',impulse:false,availableAt:start+13*M},b:{time:start+20.5*M,price:100,edge:'wick',impulse:false,availableAt:start+30*M},availableAt:start+30*M,asOf:at,value:100,slope:0,touches:999,wickTouches:999,bodyTouches:0,broken:false,score:100,segmentStart:start,segmentEnd:at};
+  const line:TrendLine={id:contract+'|fixture|wick',family:contract+'|fixture',minutes:5,polarity:resistance?'resistance':'support',style:'wick',a:{time:start+10.5*M,price:100,edge:'wick',impulse:false,availableAt:start+13*M},b:{time:start+20.5*M,price:100,edge:'wick',impulse:false,availableAt:start+30*M},availableAt:start+30*M,asOf:at,value:100,slope:0,touches:999,wickTouches:999,bodyTouches:0,broken:false,score:100,segmentStart:start,segmentEnd:at};
   const snapshot:TrendSnapshot={...base,lines:[line]},entry:TrendEntry={id:'synthetic',account:'TEST',contract,entry:new Date(at+15000).toISOString(),entryPrice:resistance?200-entryPrice:entryPrice,dir:resistance?'Short':'Long',gross:100,net:95};
   return {prices,prepared,snapshot,line,entry};
 }
@@ -53,12 +53,12 @@ test('future OHLC, completed-trade outcomes and later scale-in prices cannot imp
 });
 
 test('the current setup contact cannot count as an earlier independent line test',()=>{
-  for(const style of ['contact','after-rejection'] as const){const f=fixture(style,false,false),r=result(f);assert.equal(f.line.touches,999);assert.equal(r.match!.priorTests,0);assert.equal(r.confidence,'possible');assert.ok(r.reasons.includes('two-anchors'));}
+  for(const style of ['contact','after-rejection'] as const){const f=fixture(style,false,false),r=result(f);assert.equal(f.line.touches,999);assert.equal(r.match,null);assert.equal(r.status,'near-only');assert.ok(r.reasons.includes('weak-structure'));}
 });
 
 test('line availability must precede the interaction and its approach for stronger evidence',()=>{
   const f=fixture('after-rejection');f.line.availableAt=start+98*M;assert.notEqual(result(f).style,'after-rejection');
-  const contact=fixture('contact');contact.line.availableAt=start+99*M;const r=result(contact);assert.equal(r.style,'contact');assert.equal(r.confidence,'possible');assert.ok(r.reasons.includes('late-availability'));
+  const contact=fixture('contact');contact.line.availableAt=start+99*M;const r=result(contact);assert.equal(r.style,null);assert.equal(r.status,'near-only');assert.ok(r.reasons.includes('weak-structure'));
   contact.line.availableAt=contact.snapshot.asOf+1;assert.equal(result(contact).status,'unclassified');
 });
 
@@ -81,9 +81,9 @@ test('duplicating or adding equivalent paths does not create independent votes o
   f.snapshot.lines.reverse();assert.deepEqual(result(f),r);
 });
 
-test('competing timing hypotheses remain explicit instead of winning a candidate vote',()=>{
-  const f=fixture('after-rejection',false,false),other={...f.line,id:contract+'|different',family:contract+'|different',a:{...f.line.a,price:100.9},b:{...f.line.b,price:100.9},value:100.9};
-  f.snapshot.lines.push(other);const r=result(f);assert.equal(r.families,2);assert.equal(r.ambiguous,true);assert.equal(r.confidence,'possible');assert.ok(r.reasons.includes('competing-sequences'));
+test('an unvalidated alternative timing does not win a candidate vote',()=>{
+  const f=fixture('after-rejection'),other={...f.line,id:contract+'|different',family:contract+'|different',a:{...f.line.a,price:100.9},b:{...f.line.b,price:100.9},value:100.9};
+  f.snapshot.lines.push(other);const r=result(f);assert.equal(r.style,'after-rejection');assert.equal(r.ambiguous,false);assert.equal(r.confidence,'strong');
 });
 
 test('flat proximity without a directional approach stays near-only',()=>{
@@ -104,7 +104,7 @@ test('a materially sloping contact minute cannot produce stronger rejection evid
   const f=fixture('after-rejection'),slope=.75/M,at=f.snapshot.asOf;
   f.prices=f.prices.map(b=>{const shift=slope*((b.start+b.end)/2-at);return {...b,open:b.open+shift,high:b.high+shift,low:b.low+shift,close:b.close+shift};});
   f.line.a.price+=slope*(f.line.a.time-at);f.line.b.price+=slope*(f.line.b.time-at);f.line.slope=slope;f.entry.entryPrice!+=slope*(Date.parse(f.entry.entry)-at);f.prepared=prepareTrends(f.prices,contract);
-  const r=result(f);assert.equal(r.style,'after-rejection');assert.equal(r.confidence,'possible');assert.ok(r.reasons.includes('sloping-contact-ambiguity'));
+  const r=result(f);assert.equal(r.status,'near-only');assert.equal(r.match,null);assert.ok(r.reasons.includes('weak-structure'));
 });
 
 test('steep prior timeframe candles cannot invent independent validation for a contact-price fill',()=>{
@@ -116,13 +116,13 @@ test('steep prior timeframe candles cannot invent independent validation for a c
   f.line.minutes=5;const five=f.prepared.streams.find(s=>s.minutes===5)!;
   const prior=five.bars.find(b=>b.start===start+40*M)!;prior.low=1100+slope*((prior.start+prior.end)/2-at);prior.atr=2;
   f.entry.entryPrice=1100+slope*(Date.parse(f.entry.entry)-at)+.2;
-  const r=result(f);assert.equal(r.style,'contact');assert.equal(r.match!.priorTests,0);assert.equal(r.confidence,'possible');
+  const r=result(f);assert.equal(r.style,null);assert.equal(r.match,null);assert.equal(r.status,'near-only');
 });
 
-test('availability at the contact-bar start is eligible but one millisecond later is not',()=>{
-  const f=fixture('after-rejection');f.line.availableAt=start+97*M;assert.equal(result(f).style,'after-rejection');
+test('availability at the contact-bar start cannot replace earlier independent validation',()=>{
+  const f=fixture('after-rejection');f.line.availableAt=start+97*M;assert.equal(result(f).status,'near-only');
   f.line.availableAt++;assert.notEqual(result(f).style,'after-rejection');
-  const c=fixture('contact');c.line.availableAt=c.snapshot.asOf;const r=result(c);assert.equal(r.style,'contact');assert.equal(r.confidence,'possible');assert.ok(r.reasons.includes('late-availability'));
+  const c=fixture('contact');c.line.availableAt=c.snapshot.asOf;const r=result(c);assert.equal(r.style,null);assert.equal(r.status,'near-only');assert.ok(r.reasons.includes('weak-structure'));
 });
 
 test('an entry beyond the wrong side of the contact band is not a bounce attribution',()=>{
@@ -141,4 +141,31 @@ test('equivalent paths retain conflicting equally strong timing labels within th
   assert.equal(attributeTrendEntry(f.entry,{...f.snapshot,lines:[other]},f.prepared).style,'contact');
   assert.equal(attributeTrendEntry(f.entry,{...f.snapshot,lines:[other]},f.prepared).confidence,'strong');
   f.snapshot.lines.push(other);const r=result(f);assert.equal(r.families,1);assert.equal(r.ambiguous,true);assert.equal(r.confidence,'possible');assert.deepEqual(r.alternativeStyles,['contact']);assert.ok(r.alternatives.some(a=>a.style==='contact'));
+});
+
+
+test('a flipped formation retest and its adjacent continuation cannot validate their own new role',()=>{
+ const f=fixture('contact');
+ for(let i=40;i<50;i++)f.prices[i]=bar(i,102,103,100.25,102);
+ f.prepared=prepareTrends(f.prices,contract);f.line.availableAt=start+45*M;
+ f.line.flip={from:'resistance',formationAt:start+20*M,breakAt:start+35*M,retestAt:start+40*M,confirmedAt:start+45*M};
+ const r=result(f);assert.equal(r.status,'near-only');assert.equal(r.match,null);
+});
+
+test('a weak secondary edge needs two independent tests before this approach, with separate validation availability',()=>{
+ const f=fixture('contact');f.line.structureBasis='tested-continuation';f.line.structureAt=start+45*M;
+ assert.equal(result(f).status,'near-only');
+ f.prices[65]=bar(65,102,103,100.25,102);f.prepared=prepareTrends(f.prices,contract);
+ const ready=result(f);assert.equal(ready.status,'matched');assert.equal(ready.match!.priorTests,2);
+ f.line.structureAt=start+99*M;assert.equal(result(f).status,'near-only');
+});
+
+test('an impulse B and its continuing contacts cannot supply their own independent test',()=>{
+ const f=fixture('contact',false,false);f.line.b.time=start+22.5*M;f.line.b.impulse=true;f.line.availableAt=start+25*M;f.line.structureBasis='impulse-continuation';
+ for(let i=20;i<35;i++)f.prices[i]=bar(i,102,103,100.25,102);
+ f.prepared=prepareTrends(f.prices,contract);
+ assert.equal(result(f).status,'near-only');assert.equal(result(f).match,null);
+ // Two fully separated source bars precede a genuine return.
+ f.prices[50]=bar(50,102,103,100.25,102);f.prepared=prepareTrends(f.prices,contract);
+ const returned=result(f);assert.equal(returned.status,'matched');assert.equal(returned.match!.priorTests,1);
 });
