@@ -34,3 +34,8 @@ test('settled missing coverage, firm removals and possible saved-payout overlaps
  const data=journal(),base=data.adjustments![0];data.adjustments=[{...base,id:'missing-coverage',amount:null,tradingNet:null,kind:'unexplained',reasons:['Missing trading results']},{...base,id:'firm-removal',kind:'firm-adjustment',reasons:['Firm profit removal']},{...base,id:'possible-overlap',possiblePayoutIds:['historical'],reasons:['Possible saved payout']}];
  const html=render(data);assert.equal((html.match(/data-transaction-kind="payout"/g)||[]).length,1);assert.match(html,/\$1,234\.56/);assert.match(html,/Other balance changes/);assert.match(html,/Missing trading results/);assert.match(html,/Firm profit removal/);assert.match(html,/Saved payout overlap/);assert.doesNotMatch(html,/Provisional|Upload state|Uploads settled/);
 });
+test('offset posting residuals add neither a payout nor other balance-change clutter',()=>{
+ const data=journal(),ordinary=data.adjustments![0],debit={...ordinary,id:'posting-debit',amount:-279.75,settlementOffsetId:'posting-credit'},credit={...ordinary,id:'posting-credit',amount:279.75,kind:'credit' as const,settlementOffsetId:'posting-debit'};
+ data.adjustments=[ordinary,debit,credit];const before=JSON.stringify(data),html=render(data);
+ assert.equal((html.match(/data-transaction-kind="payout"/g)||[]).length,2);assert.match(html,/\$3,234\.56/);assert.match(html,/2 payouts/);assert.doesNotMatch(html,/Other balance changes|279\.75|Reasons &amp; classification/);assert.equal(JSON.stringify(data),before);
+});

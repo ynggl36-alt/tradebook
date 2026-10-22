@@ -22,7 +22,7 @@ export function CashView({journal,start,end,account,profiles,onEdit,onUpdated}:{
  const costs=cash.filter(row=>row.kind!=='payout'),knownCosts=costs.filter(row=>row.expense!==null),spent=knownCosts.reduce((total,row)=>total+Math.round(row.expense!*100),0)/100;
  // Let incoming uploads settle in the background before presenting either a
  // payout or a balance exception. A payout never needs a separate pending row.
- const payoutIds=new Set(unrecordedPayouts(adjustments).map(row=>row.id)),otherChanges=adjustments.filter(row=>row.settled&&!payoutIds.has(row.id)&&!(row.kind==='payout'&&row.payoutId));
+ const payoutIds=new Set(unrecordedPayouts(adjustments).map(row=>row.id)),otherChanges=adjustments.filter(row=>row.settled&&!row.settlementOffsetId&&!payoutIds.has(row.id)&&!(row.kind==='payout'&&row.payoutId));
  const notices=(journal.firmAdjustments||[]).filter(notice=>notice.date>=start&&notice.date<=end&&(account==='all'||notice.accounts.includes(account)));
  const newRecord=(kind:CostRecord['kind'])=>onEdit({id:crypto.randomUUID(),kind,date:reportingRange('all',centralDay(new Date().toISOString())).end,account:account==='all'?'':account,deduction:null,received:null,expense:null,note:''});
  return <>

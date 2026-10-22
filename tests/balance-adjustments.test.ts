@@ -76,6 +76,74 @@ test('late execution uploads get a short settlement window before a deduction en
  assert.deepEqual(inferredPayoutSummary(deriveBalanceAdjustments([pair],history(),[],[],now)),none);
  assert.deepEqual(inferredPayoutSummary(deriveBalanceAdjustments([pair],history(),[],[],base+12*60000)),{count:1,gross:2000});
 });
+test('a delayed trading cash posting offsets its exact adjacent residual without rewriting the evidence',()=>{
+ const points=[point(55000,0),point(54998.75,5),point(55278.5,6)],events=history([event(278.5,4)]),before=JSON.stringify({points,events:[...events]});
+ const rows=deriveBalanceAdjustments(balanceIntervals(points),events,[],[],now),debit=rows.find(row=>row.amount===-279.75)!,credit=rows.find(row=>row.amount===279.75)!;
+ assert.equal(rows.length,2);assert.equal(debit.tradingNet,278.5);assert.equal(credit.tradingNet,0);
+ assert.equal(debit.kind,'payout');assert.equal(credit.kind,'credit');assert.equal(debit.source,'automatic-estimate');assert.equal(credit.source,'automatic-estimate');
+ assert.equal(debit.before,55000);assert.equal(debit.after,54998.75);assert.equal(credit.before,54998.75);assert.equal(credit.after,55278.5);
+ assert.equal(debit.settlementOffsetId,credit.id);assert.equal(credit.settlementOffsetId,debit.id);assert.match(debit.reasons.at(-1)!,/no net balance adjustment/);
+ assert.deepEqual(inferredPayoutSummary(rows),none);assert.equal(JSON.stringify({points,events:[...events]}),before);
+});
+test('two ordinary full deductions survive beside a short trading posting offset',()=>{
+ const points=[point(55000,0),point(53000,5),point(51000,60),point(50998.75,65),point(51278.5,66)];
+ const rows=deriveBalanceAdjustments(balanceIntervals(points),history([event(278.5,64)]),[],[],base+75*60000);
+ assert.deepEqual(inferredPayoutSummary(rows),{count:2,gross:4000});assert.equal(rows.filter(row=>row.amount===-2000&&!row.settlementOffsetId).length,2);assert.equal(rows.filter(row=>row.settlementOffsetId).length,2);
+});
+test('cash-first and execution-first postings use the same exact three-minute boundary in either input order',()=>{
+ for(const cashFirst of [false,true])for(const lag of [1,3,3.001]){
+  const points=cashFirst?[point(55000,0),point(55279.75,5),point(55278.5,5+lag)]:[point(55000,0),point(54998.75,5),point(55278.5,5+lag)];
+  const events=history([event(278.5,cashFirst?5+lag/2:4)]),pairs=balanceIntervals(points),rows=deriveBalanceAdjustments(pairs,events,[],[],base+15*60000);
+  assert.equal(rows.filter(row=>row.settlementOffsetId).length,lag<=3?2:0);
+  assert.deepEqual(inferredPayoutSummary(rows),lag<=3?none:{count:1,gross:279.75});
+  assert.deepEqual(deriveBalanceAdjustments([...pairs].reverse(),events,[],[],base+15*60000),rows);
+ }
+});
+test('an automatic offset waits for both residuals to complete upload settlement',()=>{
+ const points=[point(55000,0),point(54000,5),{...point(55000,6),receivedAt:time(9)}],pairs=balanceIntervals(points);
+ const pending=deriveBalanceAdjustments(pairs,history(),[],[],now);assert.equal(pending.some(row=>row.settlementOffsetId),false);
+ const settled=deriveBalanceAdjustments(pairs,history(),[],[],base+12*60000);assert.equal(settled.filter(row=>row.settlementOffsetId).length,2);assert.deepEqual(inferredPayoutSummary(settled),none);
+});
+test('posting offsets are one-to-one and deterministic when a credit could also offset the next debit',()=>{
+ const pairs=balanceIntervals([point(55000,0),point(54000,1),point(55000,2),point(54000,3)]),rows=deriveBalanceAdjustments([...pairs].reverse(),history(),[],[],now);
+ const first=rows.find(row=>row.to===time(1))!,middle=rows.find(row=>row.to===time(2))!,last=rows.find(row=>row.to===time(3))!;
+ assert.equal(first.settlementOffsetId,middle.id);assert.equal(middle.settlementOffsetId,first.id);assert.equal(last.settlementOffsetId,undefined);assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:1000});
+});
+test('unmatched credits, different accounts, gaps, overlaps, endpoint changes and cent differences never offset',()=>{
+ const a=point(55000,0),b=point(54000,5),c=point(55000,6),other='LFF05000000000011',events=new Map([...history(),...history([],other)]);
+ const cases:BalanceInterval[][]=[
+  [interval(b,c)],
+  [interval(a,b),interval(point(54000,5,other),point(55000,6,other))],
+  [interval(a,b),interval(point(54000,6),point(55000,7))],
+  [interval(a,b),interval(point(54000,4),c)],
+  [interval(a,b),interval({...b,id:'distinct-raw-observation'},c)],
+  [interval(a,b),interval({...b,state:{...b.state,values:{CashValue:{...b.state.values.CashValue!,value:54001}}}},point(55001,6))],
+  [interval(a,b),interval(b,point(55000.01,6))],
+ ];
+ for(const pairs of cases){const rows=deriveBalanceAdjustments(pairs,events,[],[],now);assert.equal(rows.length,pairs.length);assert.ok(rows.every(row=>!row.settlementOffsetId));}
+});
+test('saved payout matches and possible historical overlaps cannot be automatically offset',()=>{
+ const pairs=balanceIntervals([point(55000,0),point(54000,5),point(55000,6)]);
+ const records=[cashRecord(),cashRecord({deduction:null,payoutAmountBasis:'trader-share',firmPayout:{firm:'Any firm',currency:'USD',amount:900,requestedDate:'2026-10-19',approvedDate:'2026-10-19',status:'Paid',source:'Synthetic'}})];
+ for(const record of records){
+  const rows=deriveBalanceAdjustments(pairs,history(),[record],[],now),debit=rows.find(row=>row.amount!<0)!;
+  assert.ok(debit.possiblePayoutIds.includes(record.id));assert.ok(rows.every(row=>!row.settlementOffsetId));assert.deepEqual(inferredPayoutSummary(rows),none);
+ }
+});
+test('an owner label on either endpoint prevents offsets and can restore the full deduction as a payout',()=>{
+ const pairs=balanceIntervals([point(55000,0),point(54000,5),point(55000,6)]),initial=deriveBalanceAdjustments(pairs,history(),[],[],now);
+ for(const target of initial)for(const kind of ['payout','ignore','firm-adjustment','unexplained'] as const){
+  const labels=[{id:target.id,kind,note:'Owner classification',updatedAt:time(9)}],snapshot=JSON.stringify(labels),rows=deriveBalanceAdjustments(pairs,history(),[],labels,now),owner=rows.find(row=>row.id===target.id)!;
+  assert.equal(owner.source,'owner');assert.equal(owner.kind,kind);assert.equal(owner.note,'Owner classification');assert.ok(rows.every(row=>!row.settlementOffsetId));assert.equal(JSON.stringify(labels),snapshot);
+  assert.equal(inferredPayoutSummary(rows).count,target.amount!<0&&kind!=='payout'?0:1);
+ }
+});
+test('a firm notice applying only to the compensating credit still protects the entire pair',()=>{
+ const start=Date.parse('2026-10-20T04:58:00Z'),points=[point(55000,0,account,start),point(54000,1,account,start),point(55000,2,account,start)];
+ const notices=[{id:'synthetic-posting-notice',date:'2026-10-20',accounts:[account],kind:'hedging-profit-removal' as const,amount:null,source:'Synthetic notice'}];
+ const rows=deriveBalanceAdjustments(balanceIntervals(points),history([],account,start),[],[],start+10*60000,notices);
+ assert.equal(rows.find(row=>row.amount!<0)!.kind,'payout');assert.ok(rows.every(row=>!row.settlementOffsetId));assert.deepEqual(inferredPayoutSummary(rows),{count:1,gross:1000});
+});
 test('cash credits, missing values and currency changes do not become payouts',()=>{
  assert.equal(deriveBalanceAdjustments([interval(point(50000,0),point(51000,5))],history(),[],[],now)[0].kind,'credit');
  const before=point(50000,0),after=point(49000,5);

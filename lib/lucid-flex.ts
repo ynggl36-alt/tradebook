@@ -45,7 +45,7 @@ export function flexPayoutDays(account:string,trades:Trade[],reference:FirmRefer
  const at=Date.parse(checkpoint.capturedAt),checkpointDay=flexSession(checkpoint.capturedAt),checkpointDate=centralDay(checkpoint.capturedAt);
  // A detected debit does not establish approval or an exact cycle reset. Avoid
  // carrying an older ready-for-payout count through a possible new payout.
- if(options?.adjustments?.some(row=>row.account===account&&row.settled&&row.amount!==null&&row.amount<0&&(row.kind==='likely-payout'||row.kind==='payout')&&Date.parse(row.to)>at&&Date.parse(row.to)<=now))return {...result,reason:'possible-payout' as const};
+ if(options?.adjustments?.some(row=>row.account===account&&row.settled&&!row.settlementOffsetId&&row.amount!==null&&row.amount<0&&(row.kind==='likely-payout'||row.kind==='payout')&&Date.parse(row.to)>at&&Date.parse(row.to)<=now))return {...result,reason:'possible-payout' as const};
  // Received cash and deductions do not establish payout approval. A date-only
  // confirmation on the capture date cannot establish which happened first.
  let ambiguousApproval=false;
