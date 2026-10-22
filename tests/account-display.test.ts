@@ -42,3 +42,10 @@ test('explicit stages win, unknown products stay unranked, and archived accounts
  const groups=accountCardGroups([unknown,archived,overridden,active].map(state),data,profiles,now);
  assert.deepEqual(groups.map(group=>group.stage),['Funded','Evaluation','Unclassified']);assert.deepEqual(ids(groups[0]),[active,archived]);assert.deepEqual(ids(groups[1]),[overridden]);assert.deepEqual(ids(groups[2]),[unknown]);assert.equal(groups[2].accounts[0].progress,null);
 });
+
+test('a detected payout returns the account to five remaining days and sorts it behind closer accounts',()=>{
+ const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];
+ data.adjustments=[{id:'synthetic-reset',account:reset,date:'2026-10-20',from:'2026-10-20T14:00:00Z',to:'2026-10-20T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],reasons:[],note:''}];
+ const [group]=accountCardGroups([reset,near].map(state),data,new Map(),now);
+ assert.deepEqual(ids(group),[near,reset]);assert.equal(group.accounts[1].progress?.payout.days,0);assert.equal(group.accounts[1].progress?.payout.remaining,5);
+});

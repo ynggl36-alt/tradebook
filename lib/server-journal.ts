@@ -8,6 +8,7 @@ import type {FirmReference} from './firm-reference';
 import {planFirmPayoutImport,payoutSummary,validateFirmPayout} from './payouts';
 import type {AccountMonitor,AccountState,AccountStateData} from './account-state';
 import {aggregateRealized,realizedEvents,realizedCheckpoint} from './realized';
+import {latestPayoutDeduction} from './lucid-flex';
 import type {RealizedDay,RealizedEvent} from './realized';
 import firmNotices from '../data/firm-adjustments.json';
 import {canonicalJson,observation,deriveBalanceAdjustments} from './balance-adjustments';
@@ -175,7 +176,9 @@ export async function loadJournal():Promise<Journal>{
   if(nextFuture)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('next_future_fill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value").bind(nextFuture).run();
   else await db().prepare("DELETE FROM journal_meta WHERE key='next_future_fill'").run();
   const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash,ps.results.map(row=>JSON.parse(row.data)as AccountProfile),firmReferences);
-  const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=firmReferences.flatMap(ref=>ref.flex?[realizedCheckpoint(ref.account,ref.flex.capturedAt,realizedCache.get(ref.account)?.events||[])]:[]);
+  const resetSources=[...new Set(balanceData.adjustments.map(row=>row.account))].flatMap(account=>{const reset=latestPayoutDeduction(account,balanceData.adjustments,asOf);return reset?[{account,capturedAt:reset.to}]:[];});
+  const checkpointSources=[...firmReferences.flatMap(ref=>ref.flex?[{account:ref.account,capturedAt:ref.flex.capturedAt}]:[]),...resetSources];
+  const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=checkpointSources.filter((row,i,all)=>all.findIndex(other=>other.account===row.account&&other.capturedAt===row.capturedAt)===i).map(row=>realizedCheckpoint(row.account,row.capturedAt,realizedCache.get(row.account)?.events||[]));
   return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,...balanceData,revision:readingVersion.revision,trades:hs.results.flatMap(h=>JSON.parse(h.trades_data)).filter(trade=>Date.parse(trade.exit)<=asOf),accounts:hs.results.map(h=>JSON.parse(h.summary_data)),
     profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash,imports:im.results as unknown as Journal['imports'],lastSaved:last?.updated||'',seedVersion:version?.value||''};
 }
