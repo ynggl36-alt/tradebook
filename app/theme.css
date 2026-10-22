@@ -421,3 +421,20 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .calendar-balance { min-width:145px; font-variant-numeric:tabular-nums; }
 
 .entry-price-context{display:block;max-width:240px}.entry-price-context small{display:block;white-space:normal;line-height:1.45}.entry-price-context small+small{margin-top:3px}
+
+/* Quiet trade chart: price first, optional evidence below. */
+.chart-details{border-top:1px solid var(--line);margin:0 22px 16px;color:var(--text-secondary)}
+.chart-details>summary,.chart-review-details>summary{display:flex;align-items:center;gap:10px;padding:15px 0;cursor:pointer;list-style:none;font-size:12px;font-weight:550}
+.chart-details>summary::-webkit-details-marker,.chart-review-details>summary::-webkit-details-marker{display:none}
+.chart-details>summary>span{font-size:10px;font-weight:400;color:var(--muted);margin-left:auto}
+.chart-details[open]>summary>svg,.chart-review-details[open]>summary>svg{transform:rotate(90deg)}
+.chart-selection-note{font-size:11px;line-height:1.7;padding:0 0 15px;max-width:720px}
+.chart-details .price-notice,.chart-details .trend-entry-evidence{margin:0 0 17px}
+.chart-details .trend-chart-summary{padding:0 0 17px}
+.chart-details .weekly-gap-details{margin:0 0 14px}
+.chart-details .price-strategy-note{padding:0 0 15px}
+.chart-quality-alert{margin:0;padding:2px 22px 13px;font-size:11px;color:var(--warning);line-height:1.6}
+.chart-review-details{border:1px solid var(--line);border-radius:8px;padding:0 18px}
+.chart-review-details>summary{justify-content:space-between}
+.chart-review-details .quick-trade-review{border:0;margin:0;padding:0 0 18px}
+@media(max-width:640px){.chart-details{margin-left:15px;margin-right:15px}.chart-details>summary>span{display:none}.chart-quality-alert{padding-left:15px;padding-right:15px}}
