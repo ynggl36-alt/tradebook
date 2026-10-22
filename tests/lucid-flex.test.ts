@@ -52,7 +52,7 @@ test('cash amounts alone cannot locate a reset; later approvals without observed
 });
 test('unknown new costs and missing checkpoints keep uncertainty explicit',()=>{
  const unknown=flexPayoutDays(account,[{...trade(150),symbol:'GC'}],ref(),[],now);assert.equal(unknown.days,null);assert.equal(unknown.reason,'costs');
- assert.equal(flexPayoutDays(account,[],undefined,[],now).days,null);
+ assert.equal(flexPayoutDays(account,[],undefined,[],now).days,0);
  assert.equal(flexPayoutDays(account,[trade(150)],ref(5),[],now).days,5);
 });
 test('firm day checkpoints validate independently of money and reject inconsistent stages, counts and timestamps',()=>{
@@ -123,7 +123,7 @@ test('the newest observed payout wins and a newer known funded checkpoint can su
  checkpoint.flex!.stage='Evaluation';assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,0);
  checkpoint.flex!.stage='Funded';checkpoint.flex!.qualifyingDays=4;checkpoint.flex!.capturedAt='2026-10-19T18:00:00Z';
  assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,0);
- assert.equal(flexPayoutDays(account,[],checkpoint,[],now).days,null);
+ assert.equal(flexPayoutDays(account,[],checkpoint,[],now).days,0);
 });
 test('pre-payout session profit is excluded and the count uses only the post-deduction split',()=>{
  const reset=deduction(),options={adjustments:[reset],sessions:[session(1010)],checkpoints:[capture(1000,10,{capturedAt:reset.to})]};
@@ -184,4 +184,39 @@ test('earlier observed payouts on the same date do not invalidate the latest res
  const checkpoint=ref(1);checkpoint.flex!.capturedAt='2026-10-19T15:30:00Z';assert.equal(flexPayoutDays(account,[],checkpoint,cash,now,{adjustments}).days,1);
  const later=cash.map(row=>({...row,payoutApprovalAt:'2026-10-19T15:45:00Z'}));
  assert.equal(flexPayoutDays(account,[],checkpoint,later,now,{adjustments}).reason,'payout');
+});
+test('fresh funded accounts count one day per qualifying session without any manual starting record',()=>{
+ const result=flexPayoutDays(account,[],undefined,[],Date.parse('2026-10-21T16:00:00Z'),{sessions:[session(75),{...session(75),contract:'MES 2026-12',symbol:'MES'},session(149.99,'2026-10-20'),session(150,'2026-10-21')]});
+ assert.equal(result.days,2);assert.equal(result.remaining,3);assert.equal(result.cycleProfit,449.99);assert.equal(result.source,'funded-start');
+ const empty=flexPayoutDays(account,[],undefined,[],now,{sessions:[]});assert.equal(empty.days,0);assert.equal(empty.cycleProfit,0);
+});
+test('cycle profit restarts after a payout while the saved drawdown floor remains independent',()=>{
+ const reference={...ref(5),minimumBalance:50100},before=JSON.stringify(reference),reset=deduction();
+ const progress=flexPayoutDays(account,[],reference,[],Date.parse('2026-10-20T16:00:00Z'),{adjustments:[reset],sessions:[session(2000),session(160,'2026-10-20')],checkpoints:[capture(1900,100,{capturedAt:reset.to})]});
+ assert.equal(progress.days,1);assert.equal(progress.cycleProfit,260);assert.equal(JSON.stringify(reference),before);
+});
+
+test('unobserved approvals in the early evening portion of the first trading day remain explicit, even with empty history',()=>{
+ const cash:CashRecord={id:'early-evening',account,kind:'payout',date:'2026-10-19',deduction:2000,received:null,expense:null,note:'',payoutApprovalAt:'2026-10-19T23:30:00Z'};
+ const at=Date.parse('2026-10-20T16:00:00Z');
+ const result=flexPayoutDays(account,[],undefined,[cash],at,{sessions:[session(500,'2026-10-20')]});assert.equal(result.reason,'payout');assert.equal(result.days,null);assert.equal(result.cycleProfit,null);
+ assert.equal(flexPayoutDays(account,[],undefined,[cash],at,{sessions:[]}).reason,'payout');
+});
+
+test('an official day-count correction does not certify a missing payout-cycle profit baseline',()=>{
+ const payout:CashRecord={id:'known-old',account,kind:'payout',date:'2026-10-19',deduction:2000,received:null,expense:null,note:'',payoutApprovalAt:'2026-10-19T13:00:00Z'};
+ const reference=ref(0,0);reference.flex!.coveredPayoutIds=[payout.id];
+ const result=flexPayoutDays(account,[],reference,[payout],Date.parse('2026-10-20T16:00:00Z'),{sessions:[session(1000,'2026-10-16'),session(160,'2026-10-20')],checkpoints:[capture(0,0)]});
+ assert.equal(result.days,1);assert.equal(result.cycleProfit,null);
+ const later={...payout,payoutApprovalAt:'2026-10-19T15:15:00Z'},reset=deduction();reference.flex!.capturedAt='2026-10-19T15:30:00Z';
+ const withEarlierReset=flexPayoutDays(account,[],reference,[later],Date.parse('2026-10-20T16:00:00Z'),{adjustments:[reset],sessions:[session(160,'2026-10-20')],checkpoints:[capture(0,0,{capturedAt:reference.flex!.capturedAt})]});
+ assert.equal(withEarlierReset.days,1);assert.equal(withEarlierReset.cycleProfit,null);
+});
+
+test('future payout evidence never hides a current fresh-cycle profit or requires a starting record',()=>{
+ const payout:CashRecord={id:'future-fresh',account,kind:'payout',date:'2026-10-20',deduction:2000,received:null,expense:null,note:''};
+ for(const future of [payout,{...payout,date:'2026-10-19',payoutApprovalAt:'2026-10-20T15:00:00Z'},{...payout,date:'2026-10-19',firmPayout:{firm:'Lucid',currency:'USD' as const,amount:2000,requestedDate:'2026-10-19',approvedDate:'2026-10-20',status:'Paid' as const,source:'Synthetic future'}}]){
+  const empty=flexPayoutDays(account,[],undefined,[future],now,{sessions:[]});assert.equal(empty.days,0);assert.equal(empty.cycleProfit,0);
+  const current=flexPayoutDays(account,[],undefined,[future],now,{sessions:[session(160)]});assert.equal(current.days,1);assert.equal(current.cycleProfit,160);
+ }
 });

@@ -15,12 +15,12 @@ function reference(account:string,days:number|null,stage:'Funded'|'Evaluation'='
 function session(account:string,net:number,day:string):RealizedDay{return {account,contract:'MNQ 2026-12',symbol:'MNQ',day,gross:net+1,commissions:1,net,exits:1,quantity:1,unmatched:0};}
 const ids=(group:ReturnType<typeof accountCardGroups>[number])=>group.accounts.map(row=>row.state.account);
 
-test('funded order uses remaining qualifying days, puts unknown cycles last, and shares displayed progress',()=>{
+test('funded order uses remaining qualifying days, starts fresh cycles automatically, and shares displayed progress',()=>{
  const data=journal(),far=funded('101'),near=funded('102'),goal=funded('103'),unknown=funded('104');
  data.firmReferences=[reference(far,1),reference(near,4),reference(goal,5)];
  const [group]=accountCardGroups([far,unknown,near,goal].map(state),data,new Map(),now);
  assert.deepEqual(ids(group),[goal,near,far,unknown]);
- assert.equal(group.accounts[0].progress?.payout.remaining,0);assert.equal(group.accounts[1].progress?.payout.remaining,1);assert.equal(group.accounts[3].progress?.payout.remaining,null);
+ assert.equal(group.accounts[0].progress?.payout.remaining,0);assert.equal(group.accounts[1].progress?.payout.remaining,1);assert.equal(group.accounts[3].progress?.payout.remaining,5);
 });
 test('a later approval removes an old day-goal account from the front without inventing a cycle reset',()=>{
  const data=journal(),reset=funded('101'),near=funded('102');data.firmReferences=[reference(reset,5),reference(near,4)];

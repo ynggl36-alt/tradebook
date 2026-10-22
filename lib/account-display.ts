@@ -7,7 +7,7 @@ export function accountFlexProgress(account:string,journal:Journal,now=Date.now(
  const stage=accountStage(account,profile??journal.profiles.find(row=>row.account===account),reference);
  if(!flexAccount(account)||(stage!=='Funded'&&stage!=='Evaluation'))return null;
  const trades=accountTrades??journal.trades.filter(trade=>trade.account===account);
- const ledger={adjustments:journal.adjustments,sessions:journal.realizedSessions?.filter(row=>row.account===account),checkpoints:journal.realizedCheckpoints?.filter(row=>row.account===account)};
+ const ledger={reportedSessions:journal.reportedSessions,reportedCheckpoints:journal.reportedCheckpoints,adjustments:journal.adjustments,sessions:journal.realizedSessions?.filter(row=>row.account===account),checkpoints:journal.realizedCheckpoints?.filter(row=>row.account===account)};
  return {stage,payout:flexPayoutDays(account,trades,reference,journal.cash,now,ledger),evaluation:flexEvaluation(trades,reference?.flex?.consistencyPercent??null,ledger)};
 }
 export type AccountFlexProgress=NonNullable<ReturnType<typeof accountFlexProgress>>;
