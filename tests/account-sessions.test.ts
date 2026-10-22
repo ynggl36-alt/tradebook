@@ -61,3 +61,63 @@ test('known fills after the latest native read advance its total, while a broken
  const broken=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,22,3)]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
  assert.equal(partial.sessions.length,0);assert.equal(partial.readings.size,1);assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse(time(7)),{sessions:aggregateRealized(broken,'session'),reportedSessions:partial.sessions}).days,null);
 });
+
+// A redundant provider position can disagree even when the economic fills and
+// both independently observed account quantities/P&L agree. No owner IDs or
+// actual records are needed to exercise this source-selection boundary.
+const flatAt='2026-10-19T21:50:00.000Z';
+function flatRow(at=flatAt,extra:Partial<NativePnlRow>={}):NativePnlRow{return {...row(0,0),capturedAt:at,net:null,netAt:null,cash:null,cashAt:null,positionsAvailable:1,positionsAt:at,positionData:'[]',...extra};}
+function positioned(minute:number,net:number,positions:unknown[]=[],extra:Partial<NativePnlRow>={}):NativePnlRow{return {...row(minute,net),positionsAvailable:1,positionsAt:time(minute),positionData:JSON.stringify(positions),...extra};}
+function disputed(){return [...baseline,fill(3,'Buy',5,200,7,3),fill(4,'Sell',5,210,2,4)];}
+function reconcile(fills=disputed(),rows=[flatRow(),positioned(6,254)]){return reportedAccountSessions(rows,new Map([[account,realizedEvents(account,fills)]]),Date.parse(time(9)),new Map([[account,fills]]));}
+
+test('a late first P&L reading reconciles economic fills from an observed flat inventory without creating missing contracts',()=>{
+ const fills=disputed(),rows=[flatRow(),positioned(6,254)],before=JSON.stringify({fills,rows}),native=reconcile(fills,rows),original=realizedEvents(account,fills);
+ assert.equal(aggregateRealized(original,'session')[0].net,null);assert.equal(native.sessions[0].net,254);assert.equal(native.projections.size,1);
+ const resolved=native.reconciledEvents.get(account)!;assert.equal(resolved.length,original.length);assert.deepEqual(resolved.map(e=>e.fillId),original.map(e=>e.fillId));assert.equal(aggregateRealized([...resolved],'session')[0].net,254);
+ assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse(time(9)),{sessions:aggregateRealized(original,'session'),reportedSessions:native.sessions}).days,1);
+ assert.equal(JSON.stringify({fills,rows}),before);
+});
+test('position reconciliation requires an earlier fresh flat observation on the same account, connection and provider',()=>{
+ for(const anchor of [undefined,flatRow(flatAt,{positionsAvailable:0}),flatRow(flatAt,{positionsAt:time(0)}),flatRow(flatAt,{connection:'Other'}),flatRow(flatAt,{provider:'Other'}),flatRow(flatAt,{currency:'CAD'}),flatRow(flatAt,{connected:0}),flatRow(time(2)),flatRow(time(0)),flatRow(flatAt,{positionData:'not-json'}),flatRow(flatAt,{positionData:JSON.stringify([{instrument:'MNQ 12-26',side:'Long',quantity:1}])})]){
+  const native=reconcile(disputed(),[...(anchor?[anchor]:[]),positioned(6,254)]);assert.equal(native.sessions.length,0);assert.equal(native.projections.size,0);
+ }
+});
+test('matching P&L alone cannot certify stale or inconsistent ending inventory, gross-only values, or missing fills',()=>{
+ for(const point of [positioned(6,254,[],{positionsAvailable:0}),positioned(6,254,[],{positionsAt:time(5)}),positioned(6,254,[{instrument:'MNQ 12-26',side:'Long',quantity:1}]),positioned(6,260),positioned(6,354)])assert.equal(reconcile(disputed(),[flatRow(),point]).sessions.length,0);
+ assert.equal(reconcile(disputed().slice(2)).sessions.length,0);assert.equal(reconcile(disputed().filter(f=>f.id!=='3')).sessions.length,0);
+ const exitOnly=disputed();exitOnly[0]={...exitOnly[0],entryFlag:false,side:'Sell'};assert.equal(reconcile(exitOnly).sessions.length,0);
+});
+test('open positions and partial exits are verified against independent current quantities while fees retain per-fill timing',()=>{
+ const fills=disputed().slice(0,3),open=[{instrument:'MNQ 12-26',side:'Long',quantity:5,averagePrice:200}],native=reconcile(fills,[flatRow(),positioned(3,156.5,open)]);
+ assert.equal(native.sessions[0].net,156.5);assert.equal(native.reconciledEvents.get(account)!.at(-1)!.net,-2.5);
+});
+test('the same verified prefix reconciles balance changes and payout checkpoints without changing saved execution evidence',()=>{
+ const fills=disputed(),rows=[flatRow(),positioned(3,156.5,[{instrument:'MNQ 12-26',side:'Long',quantity:5}]),positioned(6,254),positioned(7,254,[],{cash:48254})],native=reconcile(fills,rows),original=realizedEvents(account,fills);
+ const checkpoint=reportedCheckpoint(account,time(4),native,original)!;assert.equal(checkpoint.net,254);assert.equal(checkpoint.afterNet,0);
+ const stateRows=rows.filter(r=>r.net!==null).map(r=>observation(state(r),'0.5.0',true));const changes=deriveBalanceAdjustments(balanceIntervals(stateRows),native.reconciledEvents,[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
+ assert.equal(changes.length,1);assert.equal(changes[0].amount,-2000);assert.equal(changes[0].kind,'payout');assert.equal(aggregateRealized(original,'session')[0].net,null);
+});
+test('later unresolved fills, future records and counter resets cannot extend a reconciled prefix',()=>{
+ const fills=[...disputed(),fill(5,'Buy',5,220,9,7)],native=reconcile(fills,[flatRow(),positioned(6,254)]);
+ assert.equal(native.sessions.length,0);assert.equal(native.reconciledEvents.get(account)!.at(-1)!.coverageIssues,1);assert.equal(reportedCheckpoint(account,time(7),native,realizedEvents(account,fills)),null);
+ const reset=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254})]);assert.equal(reset.sessions.length,0);
+ const future=positioned(10,254);assert.equal(reconcile(disputed(),[flatRow(),future]).sessions.length,0);
+});
+test('independent end-to-end verification can reconstruct an earlier checkpoint, while an as-of read cannot use future verification',()=>{
+ const fills=disputed(),native=reconcile(fills),checkpoint=reportedCheckpoint(account,time(3),native,realizedEvents(account,fills))!;
+ assert.equal(checkpoint.net,156.5);assert.equal(checkpoint.afterNet,97.5);
+ const earlier=reportedAccountSessions([flatRow(),positioned(6,254)],new Map([[account,realizedEvents(account,fills)]]),Date.parse(time(3)),new Map([[account,fills]]));
+ assert.equal(reportedCheckpoint(account,time(3),earlier,realizedEvents(account,fills)),null);
+});
+test('a P&L counter reset coinciding with a cash deduction cannot turn the previous profit into a trading loss or a different payout amount',()=>{
+ const events=realizedEvents(account,baseline),rows=[row(2,159),row(3,0,48159)],native=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse(time(7)));
+ assert.equal(native.sessions.length,0);
+ const adjustments=deriveBalanceAdjustments(balanceIntervals(rows.map(r=>observation(state(r),'0.5.0',true))),new Map([[account,events]]),[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
+ assert.equal(adjustments[0].amount,-2000);assert.equal(adjustments[0].tradingNet,0);assert.equal(adjustments[0].kind,'payout');
+ const settledRows=[row(2,159),row(3,0,50159),row(4,0,48159)],settledNative=reportedAccountSessions(settledRows,new Map([[account,events]]),Date.parse(time(7)));
+ const later=deriveBalanceAdjustments(balanceIntervals(settledRows.map(r=>observation(state(r),'0.5.0',true))),new Map([[account,events]]),[],[],Date.parse(time(12)),[],{nativeReadings:settledNative.readings});
+ assert.equal(later.length,1);assert.equal(later[0].amount,-2000);assert.equal(later[0].tradingActivity,false);
+ const realLoss=realizedEvents(account,[...baseline,fill(3,'Buy',1,200,1,3),fill(4,'Sell',1,121,0,4)]),known=reportedAccountSessions([row(2,159),row(5,0,50000)],new Map([[account,realLoss]]),Date.parse(time(7)));
+ assert.equal(known.sessions[0].net,0);
+});

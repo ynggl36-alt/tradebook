@@ -402,3 +402,20 @@ test('funded native progress and payout reconciliation bypass bad execution posi
   assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);assert.deepEqual(paid.cash,data.cash);assert.deepEqual(paid.trades,data.trades);
  });
 });
+
+test('late native snapshots reconcile a position-metadata disagreement from an earlier flat capture without manual counts or history writes',async()=>{
+ await withSettledClock(async()=>{
+  const account='LFF05000000000042',time=(m:number)=>'2026-10-20T14:'+String(m).padStart(2,'0')+':00.000Z';
+  await server.saveAccountState(integrationCapture(account,50000,'2026-10-19T21:50:00.000Z'));
+  const fills=[{id:'flat-entry',side:'Buy',qty:1,price:100,pos:1,m:0},{id:'flat-exit',side:'Sell',qty:1,price:180,pos:0,m:1},{id:'disputed-entry',side:'Buy',qty:5,price:200,pos:7,m:3},{id:'disputed-exit',side:'Sell',qty:5,price:210,pos:2,m:4}].map(fill=>({...fill,account,contract:'MNQ 2026-12',time:time(fill.m)}));
+  await server.importExecutions({source:'flat-inventory-integration',checksum:(++integrationImport).toString(16).padStart(64,'0'),chunk:0,fills});
+  const snapshot=(m:number,cash:number)=>{const capture=integrationCapture(account,cash,time(m));(capture.accounts[0].values as any).RealizedProfitLoss={value:254,at:time(m),source:'PlatformRead'};return capture;};
+  const original=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),cashBefore=(await server.loadJournal()).cash;
+  await server.saveAccountState(snapshot(6,50254));const journal=await server.loadJournal();
+  assert.equal(journal.reportedSessions!.find(row=>row.account===account)?.net,254);assert.equal(journal.realizedSessions!.find(row=>row.account===account)?.net,null);assert.equal(journal.adjustments!.some(row=>row.account===account),false);
+  const {accountFlexProgress}=require('../lib/account-display')as typeof import('../lib/account-display');assert.equal(accountFlexProgress(account,journal)?.payout.days,1);assert.equal(accountFlexProgress(account,journal)?.payout.cycleProfit,254);
+  assert.equal('projections' in journal,false);assert.equal('reconciledEvents' in journal,false);
+  await server.saveAccountState(snapshot(7,48254));const paid=await server.loadJournal(),deduction=paid.adjustments!.find(row=>row.account===account&&row.amount===-2000);assert.ok(deduction);assert.equal(deduction.kind,'payout');assert.equal(accountFlexProgress(account,paid)?.payout.days,0);
+  assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),original);assert.deepEqual(paid.cash,cashBefore);
+ });
+});

@@ -220,3 +220,17 @@ test('future payout evidence never hides a current fresh-cycle profit or require
   const current=flexPayoutDays(account,[],undefined,[future],now,{sessions:[session(160)]});assert.equal(current.days,1);assert.equal(current.cycleProfit,160);
  }
 });
+
+test('a payout observed after intervening trading preserves a confirmed-day lower bound without inventing the posting time',()=>{
+ const reset=deduction({from:'2026-10-17T15:00:00Z',to:'2026-10-19T15:00:00Z',tradingActivity:true,tradingNet:800});
+ const options={adjustments:[reset],sessions:[session(200,'2026-10-20')],checkpoints:[capture(800,0,{capturedAt:reset.to})]};
+ const progress=flexPayoutDays(account,[],undefined,[],Date.parse('2026-10-20T16:00:00Z'),options);
+ assert.equal(progress.days,null);assert.equal(progress.confirmedDays,1);assert.equal(progress.remaining,null);assert.equal(progress.reason,'payout-time');assert.equal(progress.cycleProfit,null);
+ assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse('2026-10-20T16:00:00Z'),{...options,adjustments:[{...reset,tradingNet:0}]}).reason,'payout-time');
+ assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse('2026-10-20T16:00:00Z'),{...options,adjustments:[{...reset,tradingActivity:false,tradingNet:0}]}).days,1);
+ const official=ref(2,200);official.date='2026-10-20';official.flex!.capturedAt='2026-10-20T15:30:00Z';
+ const corrected=flexPayoutDays(account,[],official,[],Date.parse('2026-10-20T16:00:00Z'),{...options,checkpoints:[...options.checkpoints,capture(200,0,{capturedAt:official.flex!.capturedAt,session:'2026-10-20'})]});
+ assert.equal(corrected.days,2);assert.equal(corrected.source,'firm-checkpoint');assert.equal(corrected.cycleProfit,null);
+ const laterDays=Array.from({length:5},(_,i)=>session(160,'2026-10-'+String(20+i)));
+ assert.equal(flexPayoutDays(account,[],undefined,[],Date.parse('2026-10-24T16:00:00Z'),{...options,sessions:laterDays}).days,5);
+});

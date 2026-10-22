@@ -12,7 +12,7 @@ export type BalanceObservation={id:string;account:string;capturedAt:string;recor
 export type BalanceInterval={before:BalanceObservation;after:BalanceObservation;gap?:boolean};
 export type AdjustmentKind='likely-payout'|'payout'|'firm-adjustment'|'unexplained'|'credit'|'ignore';
 export type AdjustmentLabel={id:string;kind:'payout'|'firm-adjustment'|'unexplained'|'ignore';note:string;updatedAt:string};
-export type BalanceAdjustment={id:string;account:string;date:string;from:string;to:string;before:number;after:number;tradingNet:number|null;amount:number|null;kind:AdjustmentKind;settled:boolean;source:'automatic-estimate'|'firm-record'|'owner';payoutId?:string;settlementOffsetId?:string;possiblePayoutIds:string[];reasons:string[];note:string};
+export type BalanceAdjustment={id:string;account:string;date:string;from:string;to:string;before:number;after:number;tradingNet:number|null;tradingActivity?:boolean;amount:number|null;kind:AdjustmentKind;settled:boolean;source:'automatic-estimate'|'firm-record'|'owner';payoutId?:string;settlementOffsetId?:string;possiblePayoutIds:string[];reasons:string[];note:string};
 export type BalanceTracking={observations:number;first:string|null;last:string|null};
 export type FirmAdjustmentNotice={id:string;date:string;accounts:string[];kind:'hedging-profit-removal';amount:null;source:string};
 export function canonicalJson(value:unknown):string{
@@ -81,7 +81,7 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
   if(linked&&!incident)kind='payout';
   if(possible.length&&!linked)reasons.push('A saved payout may explain this deduction; it is excluded from additional payout totals.');
   if(label)kind=label.kind;
-  rows.push({id,account:after.account,date:centralDay(b.at),from:a.at,to:b.at,before:a.value,after:b.value,tradingNet,amount,kind,settled,source:label?'owner':'automatic-estimate',...(linked&&!incident?{payoutId:matches[0].id}:{}),possiblePayoutIds:possible.map(record=>record.id),reasons,note:label?.note??(incident?incident.source:'')});
+  rows.push({id,account:after.account,date:centralDay(b.at),from:a.at,to:b.at,before:a.value,after:b.value,tradingNet,tradingActivity:relevant.length>0||(tradingNet!==null&&tradingNet!==0),amount,kind,settled,source:label?'owner':'automatic-estimate',...(linked&&!incident?{payoutId:matches[0].id}:{}),possiblePayoutIds:possible.map(record=>record.id),reasons,note:label?.note??(incident?incident.source:'')});
   endpoints.set(id,{before:before.id,after:after.id,notice:!!incident});
  }
  const uses=new Map<string,number>();for(const row of rows)if(row.payoutId)uses.set(row.payoutId,(uses.get(row.payoutId)||0)+1);

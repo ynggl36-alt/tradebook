@@ -18,7 +18,7 @@ import type {FirmAdjustmentNotice} from './balance-adjustments';
 export const KNOWN_FIRM_ADJUSTMENTS=firmNotices as FirmAdjustmentNotice[];
 import type {BalanceObservation,BalanceInterval,AdjustmentLabel,BalanceTracking} from './balance-adjustments';
 
-const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];nextFutureAt?:number}>();
+const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];nextFutureAt?:number;fills?:Fill[]}>();
 // Read-only access for bounded diagnostics. A caller must verify history size
 // and revision first; a due future execution invalidates this cached ledger.
 // This never warms the cache or updates journal metadata.
@@ -110,11 +110,11 @@ async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmR
    WHERE adjacent.previous_id IS NOT NULL AND adjacent.cash_value IS NOT NULL AND adjacent.previous_cash IS NOT NULL AND (ABS(adjacent.cash_value-adjacent.previous_cash)>=.001 OR EXISTS(SELECT 1 FROM execution_times e WHERE e.account=adjacent.account AND e.time>adjacent.previous_cash_at AND e.time<=adjacent.cash_at) OR adjacent.realized<>adjacent.previous_realized)`).all<{data:string;previous:string;gap:number;received_at:string;previous_received:string}>(),
   db().prepare('SELECT data FROM balance_adjustment_labels').all<{data:string}>(),
   db().prepare('SELECT COUNT(*) AS observations,MIN(captured_at) AS first,MAX(captured_at) AS last FROM account_observations').first<BalanceTracking>(),
-  db().prepare(`SELECT account,captured_at AS capturedAt,json_extract(data,'$.state.values.RealizedProfitLoss.value') AS net,json_extract(data,'$.state.values.RealizedProfitLoss.at') AS netAt,cash_value AS cash,json_extract(data,'$.state.values.CashValue.at') AS cashAt,json_extract(data,'$.state.connected') AS connected,json_extract(data,'$.state.currency') AS currency,json_extract(data,'$.state.connection') AS connection,json_extract(data,'$.state.provider') AS provider FROM account_observations o WHERE captured_at<=? AND json_extract(data,'$.state.values.RealizedProfitLoss.value') IS NOT NULL AND (origin<>'legacy' OR NOT EXISTS (SELECT 1 FROM account_observations r WHERE r.account=o.account AND r.captured_at=o.captured_at AND r.origin<>'legacy')) ORDER BY account,captured_at`).bind(new Date(asOf).toISOString()).all<NativePnlRow>(),
+  db().prepare(`SELECT account,captured_at AS capturedAt,json_extract(data,'$.state.values.RealizedProfitLoss.value') AS net,json_extract(data,'$.state.values.RealizedProfitLoss.at') AS netAt,cash_value AS cash,json_extract(data,'$.state.values.CashValue.at') AS cashAt,json_extract(data,'$.state.connected') AS connected,json_extract(data,'$.state.currency') AS currency,json_extract(data,'$.state.connection') AS connection,json_extract(data,'$.state.provider') AS provider,json_extract(data,'$.state.positionsAvailable') AS positionsAvailable,json_extract(data,'$.state.positionsAt') AS positionsAt,json_extract(data,'$.state.positions') AS positionData FROM account_observations o WHERE captured_at<=? AND (json_extract(data,'$.state.values.RealizedProfitLoss.value') IS NOT NULL OR json_extract(data,'$.state.positionsAvailable')=1) AND (origin<>'legacy' OR NOT EXISTS (SELECT 1 FROM account_observations r WHERE r.account=o.account AND r.captured_at=o.captured_at AND r.origin<>'legacy')) ORDER BY account,captured_at`).bind(new Date(asOf).toISOString()).all<NativePnlRow>(),
  ]);
  const intervals:BalanceInterval[]=pairs.results.map(row=>({before:{...JSON.parse(row.previous),receivedAt:row.previous_received},after:{...JSON.parse(row.data),receivedAt:row.received_at},gap:!!row.gap}));
- const events=new Map([...realizedCache].map(([account,cache])=>[account,cache.events])),reported=reportedAccountSessions(nativeRows.results,events,asOf);
- return {reported,adjustments:deriveBalanceAdjustments(intervals,events,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel),Date.now(),KNOWN_FIRM_ADJUSTMENTS,{profiles,firmReferences,nativeReadings:reported.readings}),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
+ const events=new Map([...realizedCache].map(([account,cache])=>[account,cache.events])),reported=reportedAccountSessions(nativeRows.results,events,asOf,new Map([...realizedCache].flatMap(([account,cache])=>cache.fills?[[account,cache.fills] as const]:[])));
+ return {reported,adjustments:deriveBalanceAdjustments(intervals,reported.reconciledEvents,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel),Date.now(),KNOWN_FIRM_ADJUSTMENTS,{profiles,firmReferences,nativeReadings:reported.readings}),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
 }
 export async function saveAdjustmentLabel(input:Record<string,unknown>){
  const id=text(input.id,500),kind=text(input.kind,30);if(!['automatic','payout','firm-adjustment','unexplained','ignore'].includes(kind))throw new Error('Choose a payout, firm adjustment, unexplained change or ignored change.');
@@ -172,7 +172,7 @@ export async function loadJournal():Promise<Journal>{
       // A concurrent import is reflected on the next revision check. Only cache
       // the exact revision actually read, never label new data with an older one.
       const future=history.fills.map(fill=>Date.parse(fill.time)).filter(time=>time>asOf);
-      realizedCache.set(record.account,{revision:record.revision,rows,events,sessions:aggregateRealized(events,'session'),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
+      realizedCache.set(record.account,{revision:record.revision,rows,events,sessions:aggregateRealized(events,'session'),...(events.some(event=>event.unmatched||event.coverageIssues)?{fills:history.fills.filter(fill=>Date.parse(fill.time)<=asOf)}:{}),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
     }
   }
   const realized=hs.results.flatMap(h=>realizedCache.get(h.account)?.rows||[]);
