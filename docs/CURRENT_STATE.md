@@ -3,6 +3,7 @@
 
 ## Baseline
 
+- Accounts has three summary cards: connected accounts, reported balances and annual payouts. The annual payout total includes every account in the reporting year, including archived and disconnected accounts, using the same deduplicated full-amount ledger as Payouts & costs. Account search, roster and archive visibility do not narrow that annual total; individual account payout details remain account-scoped. The top Open contracts card is removed; position capture and per-account position details remain available.
 - Current Accounts automatically excludes recognized Lucid Flex 50K evaluations with a recorded loss-limit breach. The $2,000 EOD trailing floor starts at $48,000 and caps at $50,100; only completed sessions advance it. Actual fresh cash anchors and clean account-wide execution deltas reconstruct session closes; missing costs/inventory or contradictory cash intervals cannot manufacture a higher floor. Direct breach evidence uses flat cash, synchronized cash plus floating P&L, or supported positive net liquidation. Immutable observations preserve a past breach through later higher readings or disappearance. Existing manual terminal statuses and explicit stage overrides remain intact. Include archived labels reveals the failed card and dated value/floor evidence; the account archive shows Failed. Trades, Calendar/Analysis, profiles, payouts and raw records are unchanged. Equity-only changes within the risk band refresh the saved-data revision. No recorder, schema or trading-permission checks.
 
 - Initial shared source prepared on 2026-10-19 from the owner's working Tradebook Site.
@@ -34,6 +35,8 @@
 - Neither session has an exclusive GitHub identity when both use the owner's connected account. No automatic deployment or protected-branch enforcement is assumed.
 
 ## Work queue
+
+Owner task (2026-10-22), issue #29, branch `agent/owner/account-summary-20261022`: remove the top Open contracts summary and correct annual payouts to include all accounts rather than only the current connected roster. Owns Current Accounts summary/layout, a rendered annual-history/deduplication/year-boundary regression and this document. No accounting, detection, cash/history/profile, recorder or schema changes. Documentation PR #22 remains separate.
 
 Owner task (2026-10-22), issue #27, branch `agent/owner/standard-payout-cycle-20261022`: standardize existing/future funded payout cycles and replace provenance badges with payout counts. Owns the funded-cycle simplification, shared progress/header calculation, manual count/acknowledgment UI removal, reset-only server checkpoints, maintenance caller, synthetic regressions and this document. No competing code PR; #22 is separate documentation work. No recorder/schema/raw/financial/profile/firm-evidence writes. Saved screenshots no longer supply profit-day baselines. Missing actual session/reset evidence remains unknown rather than being replaced by a manually saved number.
 
