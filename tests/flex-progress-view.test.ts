@@ -10,12 +10,12 @@ function data():Journal{return {ready:true,trades:[],accounts:[],profiles:[],not
 const render=(journal:Journal)=>renderToStaticMarkup(createElement(FlexProgress,{account,journal,now:Date.parse('2026-10-22T15:00:00Z'),compact:true,expanded:true}));
 test('funded cards show an automatic reset without needing any manual firm checkpoint',()=>{
  const journal=data(),before=JSON.stringify(journal),html=render(journal);
- assert.match(html,/Since payout/);assert.match(html,/5 more qualifying days/);assert.match(html,/Cycle reset after payout/);assert.match(html,/Oct 22/);assert.match(html,/observed deduction/);
+ assert.match(html,/1 payout/);assert.match(html,/5 more qualifying days/);assert.match(html,/Cycle reset after payout/);assert.match(html,/Oct 22/);assert.match(html,/observed deduction/);
  assert.doesNotMatch(html,/Cycle check needed|Confirm Lucid|save a new|reference!/);assert.equal(JSON.stringify(journal),before);
 });
 test('missing post-payout fees explain unavailable days instead of prompting a manual cycle reset',()=>{
  const journal=data();journal.realizedCheckpoints=[{account,capturedAt:cut,session:'2026-10-22',net:200,afterNet:null}];
- const html=render(journal);assert.match(html,/Sync pending/);assert.match(html,/Waiting for latest P&amp;L/);assert.match(html,/Commission data is incomplete/);assert.doesNotMatch(html,/Cycle check needed|Confirm Lucid|save a new/);
+ const html=render(journal);assert.match(html,/1 payout/);assert.match(html,/Waiting for latest P&amp;L/);assert.match(html,/Commission data is incomplete/);assert.doesNotMatch(html,/Cycle check needed|Confirm Lucid|save a new/);
 });
 
 test('pending session data keeps earlier confirmed profit days visible in text and the progress steps',()=>{
@@ -24,5 +24,15 @@ test('pending session data keeps earlier confirmed profit days visible in text a
 });
 test('trading inside an observed payout window explains timing uncertainty and retains confirmed later days',()=>{
  const journal=data();journal.adjustments![0].tradingActivity=true;journal.realizedCheckpoints=[{account,capturedAt:cut,session:'2026-10-22',net:500,afterNet:200}];
- const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.match(html,/exact time is unknown/);assert.match(html,/Payout timing unknown/);assert.match(html,/Exact day count unavailable/);assert.doesNotMatch(html,/Waiting for latest P&amp;L|Sync pending|Confirm Lucid|save a new|Cycle check needed/);
+ const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.match(html,/exact time is unknown/);assert.match(html,/1 payout/);assert.match(html,/Exact day count unavailable/);assert.doesNotMatch(html,/Waiting for latest P&amp;L|Sync pending|Confirm Lucid|save a new|Cycle check needed/);
+});
+
+
+test('every funded card uses the same payout-count label without screenshot provenance',()=>{
+ const journal=data();journal.adjustments=[];
+ let html=render(journal);assert.match(html,/0 payouts/);assert.doesNotMatch(html,/Lucid checkpoint|Updated from saved data|First payout cycle|Since payout/);
+ journal.cash=[{id:'saved-payout',account,kind:'payout',date:'2026-10-21',deduction:2000,received:null,expense:null,note:''}];
+ journal.adjustments=[{...data().adjustments![0],date:'2026-10-21',payoutId:'saved-payout'}];
+ html=render(journal);assert.match(html,/1 payout</);assert.doesNotMatch(html,/2 payouts|Lucid checkpoint|Updated from saved data/);
+ journal.adjustments.push({...data().adjustments![0],id:'second-payout'});html=render(journal);assert.match(html,/2 payouts/);
 });

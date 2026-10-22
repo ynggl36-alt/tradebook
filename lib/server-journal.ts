@@ -186,7 +186,7 @@ export async function loadJournal():Promise<Journal>{
   else await db().prepare("DELETE FROM journal_meta WHERE key='next_future_fill'").run();
   const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash,ps.results.map(row=>JSON.parse(row.data)as AccountProfile),firmReferences,asOf);
   const resetSources=[...new Set(balanceData.adjustments.map(row=>row.account))].flatMap(account=>{const reset=latestPayoutDeduction(account,balanceData.adjustments,asOf);return reset?[{account,capturedAt:reset.to}]:[];});
-  const checkpointSources=[...firmReferences.flatMap(ref=>ref.flex?[{account:ref.account,capturedAt:ref.flex.capturedAt}]:[]),...resetSources];
+  const checkpointSources=resetSources;
   const uniqueCheckpoints=checkpointSources.filter((row,i,all)=>all.findIndex(other=>other.account===row.account&&other.capturedAt===row.capturedAt)===i);
   const reportedCheckpoints=uniqueCheckpoints.flatMap(row=>{const point=reportedCheckpoint(row.account,row.capturedAt,balanceData.reported,realizedCache.get(row.account)?.events||[]);return point?[point]:[];});
   const {reported,...balanceSummary}=balanceData;
