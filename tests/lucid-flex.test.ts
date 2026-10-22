@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {Trade,AccountProfile,CashRecord,Fill} from '../lib/types';
 import {validateFirmReference} from '../lib/firm-reference';
-import {accountStage,flexAccount,flexDaily,flexEvaluation,flexPayoutDays,flexSession} from '../lib/lucid-flex';
+import {accountStage,flexAccount,flexDaily,flexEvaluation,flexPayoutDays,flexSession,latestPayoutDeduction} from '../lib/lucid-flex';
 import {aggregateRealized,realizedCheckpoint,realizedEvents} from '../lib/realized';
 import type {RealizedCheckpoint,RealizedDay} from '../lib/realized';
 import type {BalanceAdjustment} from '../lib/balance-adjustments';
@@ -38,7 +38,7 @@ test('funded checkpoints advance by net sessions, never by fills or duplicate re
  assert.equal(flexPayoutDays(account,[{...first,account:'LFF05000000000019'}],checkpoint,[],now).days,3);
  const earlier=trade(150,'2026-10-19T14:00:00Z');assert.equal(flexPayoutDays(account,[earlier,trade(-1)],ref(4),[],now).days,3);
 });
-test('only confirmed later approvals invalidate a checkpoint; cash dates and deductions do not reset days',()=>{
+test('cash amounts alone cannot locate a reset; later approvals without observed deductions remain unknown',()=>{
  const payout:CashRecord={id:'p',account,kind:'payout',date:'2026-10-19',deduction:1000,received:900,expense:null,note:''};
  const result=flexPayoutDays(account,[],ref(),[payout],now);assert.equal(result.days,3);assert.equal(result.reason,null);
  const oldApproval={...payout,firmPayout:{firm:'Lucid',currency:'USD' as const,amount:1000,requestedDate:'2026-10-15',approvedDate:'2026-10-16',status:'Paid' as const,source:'Owner record'}};
@@ -100,9 +100,88 @@ test('future trades, sessions and exact approval timestamps do not advance or re
  assert.equal(flexPayoutDays(account,[tomorrow],ref(),[futureApproval],now).days,3);
  assert.equal(flexPayoutDays(account,[],ref(),[],now,{sessions:[session(150,'2026-10-20')],checkpoints:[capture(null,0)]}).days,3);
 });
-test('a new likely payout suspends the old cycle count without inventing an approval or reset',()=>{
- const adjustment:BalanceAdjustment={id:'new-deduction',account,date:'2026-10-19',from:'2026-10-19T14:59:00Z',to:'2026-10-19T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'likely-payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],reasons:[],note:''};
- const result=flexPayoutDays(account,[],ref(5),[],now,{adjustments:[adjustment]});assert.equal(result.days,null);assert.equal(result.reason,'possible-payout');
- for(const change of [{...adjustment,kind:'firm-adjustment' as const},{...adjustment,settlementOffsetId:'adjacent-credit'},{...adjustment,settled:false},{...adjustment,to:'2026-10-19T14:00:00Z'},{...adjustment,account:'another'},{...adjustment,to:'2026-10-20T15:00:00Z'}])assert.equal(flexPayoutDays(account,[],ref(5),[],now,{adjustments:[change]}).days,5);
- const newCheckpoint=ref(0);newCheckpoint.flex!.capturedAt='2026-10-19T15:30:00Z';assert.equal(flexPayoutDays(account,[],newCheckpoint,[],now,{adjustments:[adjustment]}).days,0);
+const deduction=(extra:Partial<BalanceAdjustment>={}):BalanceAdjustment=>({id:'new-deduction',account,date:'2026-10-19',from:'2026-10-19T14:59:00Z',to:'2026-10-19T15:00:00Z',before:54000,after:52000,tradingNet:0,amount:-2000,kind:'likely-payout',settled:true,source:'automatic-estimate',possiblePayoutIds:[],reasons:[],note:'',...extra});
+test('a settled payout deduction automatically starts a zero-day cycle, including without an old checkpoint',()=>{
+ const adjustment=deduction(),options={adjustments:[adjustment]};
+ for(const reference of [ref(5),undefined]){
+  const result=flexPayoutDays(account,[],reference,[],now,options);
+  assert.equal(result.days,0);assert.equal(result.remaining,5);assert.equal(result.reason,null);assert.equal(result.payoutResetAt,adjustment.to);assert.equal(result.estimated,true);
+  assert.deepEqual(flexPayoutDays(account,[],reference,[],now,options),result);
+ }
+ for(const change of [{kind:'firm-adjustment' as const},{kind:'unexplained' as const},{settlementOffsetId:'adjacent-credit'},{settled:false},{amount:2000},{amount:NaN},{amount:null},{account:'another'},{to:'invalid'},{to:'2026-10-20T15:00:00Z'}]){
+  const result=flexPayoutDays(account,[],ref(5),[],now,{adjustments:[deduction(change)]});assert.equal(result.days,5);assert.equal(result.payoutResetAt,null);
+ }
+});
+test('the newest observed payout wins and a newer known funded checkpoint can supersede it',()=>{
+ const earlier=deduction({id:'earlier',to:'2026-10-19T13:00:00Z'}),latest=deduction();
+ assert.equal(latestPayoutDeduction(account,[latest,earlier],now)?.id,latest.id);
+ assert.equal(latestPayoutDeduction(account,[earlier,latest],now)?.id,latest.id);
+ const checkpoint=ref(2);checkpoint.flex!.capturedAt='2026-10-19T15:30:00Z';
+ assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,2);
+ assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).payoutResetAt,null);
+ checkpoint.flex!.qualifyingDays=null;assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,0);
+ checkpoint.flex!.stage='Evaluation';assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,0);
+ checkpoint.flex!.stage='Funded';checkpoint.flex!.qualifyingDays=4;checkpoint.flex!.capturedAt='2026-10-19T18:00:00Z';
+ assert.equal(flexPayoutDays(account,[],checkpoint,[],now,{adjustments:[latest]}).days,0);
+ assert.equal(flexPayoutDays(account,[],checkpoint,[],now).days,null);
+});
+test('pre-payout session profit is excluded and the count uses only the post-deduction split',()=>{
+ const reset=deduction(),options={adjustments:[reset],sessions:[session(1010)],checkpoints:[capture(1000,10,{capturedAt:reset.to})]};
+ const result=flexPayoutDays(account,[trade(1010)],ref(5),[],now,options);
+ assert.equal(result.days,0);assert.equal(result.today,10);
+ assert.equal(flexPayoutDays(account,[],ref(5),[],now,{...options,checkpoints:[capture(null,150,{capturedAt:reset.to,coverageIssues:1})]}).days,1);
+ assert.equal(flexPayoutDays(account,[],ref(5),[],now,{...options,checkpoints:[]}).reason,'baseline');
+ const later=Date.parse('2026-10-21T16:00:00Z');
+ const advanced=flexPayoutDays(account,[],ref(5),[],later,{...options,sessions:[...options.sessions,session(150,'2026-10-20'),session(149.99,'2026-10-21')]});
+ assert.equal(advanced.days,1);assert.equal(advanced.remaining,4);
+});
+test('partial exits spanning the deduction count their realized profit after the cut and entry fees stay at entry time',()=>{
+ const reset=deduction();
+ const fill=(id:string,side:'Buy'|'Sell',qty:number,price:number,pos:number,time:string):Fill=>({id,side,qty,price,pos,time,contract:'MNQ 2026-12',symbol:'MNQ',pv:2,ordinal:Number(id)});
+ const source=[fill('1','Buy',2,100,2,'2026-10-19T14:00:00Z'),fill('2','Sell',1,200,1,reset.to),fill('3','Sell',1,175.25,0,'2026-10-19T15:01:00Z')];
+ const events=realizedEvents(account,source),options={adjustments:[reset],sessions:aggregateRealized(events,'session'),checkpoints:[realizedCheckpoint(account,reset.to,events)]};
+ assert.equal(options.checkpoints[0].net,198.5);assert.equal(options.checkpoints[0].afterNet,150);
+ const result=flexPayoutDays(account,[],undefined,[],now,options);assert.equal(result.days,1);assert.equal(result.today,150);
+ const withEntry=realizedEvents(account,[...source,fill('4','Buy',1,175,1,'2026-10-19T15:02:00Z')]);
+ const lowered=flexPayoutDays(account,[],undefined,[],now,{adjustments:[reset],sessions:aggregateRealized(withEntry,'session'),checkpoints:[realizedCheckpoint(account,reset.to,withEntry)]});
+ assert.equal(lowered.days,0);assert.equal(lowered.today,149.5);
+});
+test('post-payout coverage and costs stay unknown unless five later known qualifying sessions settle the count',()=>{
+ const reset=deduction(),options={adjustments:[reset],sessions:[session(null)],checkpoints:[capture(200,null,{capturedAt:reset.to})]};
+ assert.equal(flexPayoutDays(account,[],ref(5),[],now,options).reason,'costs');
+ assert.equal(flexPayoutDays(account,[],ref(5),[],now,{...options,checkpoints:[{...options.checkpoints[0],afterCoverageIssues:1}]}).reason,'coverage');
+ const five=['2026-10-20','2026-10-21','2026-10-22','2026-10-23','2026-10-26'].map(day=>session(150,day));
+ assert.equal(flexPayoutDays(account,[],ref(5),[],Date.parse('2026-10-26T16:00:00Z'),{...options,sessions:[...options.sessions,...five]}).days,5);
+ const next=deduction({id:'next-payout',to:'2026-10-27T00:00:00Z'});
+ assert.equal(flexPayoutDays(account,[],ref(5),[],Date.parse('2026-10-27T16:00:00Z'),{...options,sessions:five,adjustments:[reset,next]}).days,0);
+});
+test('saved records linked to the detected payout do not demand another cycle check, while a genuinely later unobserved payout does',()=>{
+ const payout:CashRecord={id:'saved',account,kind:'payout',date:'2026-10-19',deduction:2000,received:null,expense:null,note:'',firmPayout:{firm:'Lucid',currency:'USD',amount:2000,requestedDate:'2026-10-18',approvedDate:'2026-10-19',status:'Paid',source:'Synthetic record'}};
+ for(const extra of [{payoutId:payout.id,kind:'payout' as const},{possiblePayoutIds:[payout.id]}]){
+  const reset=deduction(extra),result=flexPayoutDays(account,[],ref(5),[payout],now,{adjustments:[reset]});assert.equal(result.days,0);
+  const reference=ref(1);reference.flex!.capturedAt='2026-10-19T15:30:00Z';assert.equal(flexPayoutDays(account,[],reference,[payout],now,{adjustments:[reset]}).days,1);
+ }
+ const reset=deduction({payoutId:payout.id}),later={...payout,id:'later',payoutApprovalAt:'2026-10-19T15:30:00Z'};
+ assert.equal(flexPayoutDays(account,[],ref(5),[payout,later],now,{adjustments:[reset]}).reason,'payout');
+ assert.equal(flexPayoutDays(account,[],ref(5),[{...later,payoutApprovalAt:'2026-10-19T17:00:00Z'}],now,{adjustments:[reset]}).days,0);
+ assert.equal(flexPayoutDays(account,[],ref(5),[{...payout,id:'ambiguous'}],now,{adjustments:[reset]}).reason,'approval-time');
+});
+test('amount/date overlap links cannot hide a known later approval, while explicit checkpoint coverage remains authoritative',()=>{
+ const payout:CashRecord={id:'linked-later',account,kind:'payout',date:'2026-10-19',deduction:2000,received:null,expense:null,note:'',payoutApprovalAt:'2026-10-19T15:45:00Z'};
+ for(const extra of [{payoutId:payout.id,kind:'payout' as const},{possiblePayoutIds:[payout.id]}]){
+  const reset=deduction(extra),options={adjustments:[reset]};
+  assert.equal(flexPayoutDays(account,[],ref(5),[payout],now,options).reason,'payout');
+  const checkpoint=ref(1);checkpoint.flex!.capturedAt='2026-10-19T15:30:00Z';
+  assert.equal(flexPayoutDays(account,[],checkpoint,[payout],now,options).reason,'payout');
+  checkpoint.flex!.coveredPayoutIds=[payout.id];assert.equal(flexPayoutDays(account,[],checkpoint,[payout],now,options).days,1);
+  assert.equal(flexPayoutDays(account,[],ref(5),[{...payout,payoutApprovalAt:'2026-10-19T14:55:00Z'}],now,options).days,0);
+ }
+});
+test('earlier observed payouts on the same date do not invalidate the latest reset or a newer firm checkpoint',()=>{
+ const record=(id:string):CashRecord=>({id,account,kind:'payout',date:'2026-10-19',deduction:2000,received:null,expense:null,note:'',firmPayout:{firm:'Lucid',currency:'USD',amount:2000,requestedDate:'2026-10-18',approvedDate:'2026-10-19',status:'Paid',source:'Synthetic record'}});
+ const cash=[record('old'),record('new')],adjustments=[deduction({id:'earlier',to:'2026-10-19T14:30:00Z',payoutId:'old'}),deduction({payoutId:'new'})];
+ assert.equal(flexPayoutDays(account,[],ref(5),cash,now,{adjustments}).days,0);
+ const checkpoint=ref(1);checkpoint.flex!.capturedAt='2026-10-19T15:30:00Z';assert.equal(flexPayoutDays(account,[],checkpoint,cash,now,{adjustments}).days,1);
+ const later=cash.map(row=>({...row,payoutApprovalAt:'2026-10-19T15:45:00Z'}));
+ assert.equal(flexPayoutDays(account,[],checkpoint,later,now,{adjustments}).reason,'payout');
 });

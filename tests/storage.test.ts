@@ -368,3 +368,20 @@ test('trendline entry lookup is canonical, bounded and read-only across 40 accou
     await assert.rejects(()=>trendEntries.loadTrendEntries([{account:'',id:'x'}]),/required/);
   }finally{for(const account of accounts)sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
 });
+
+
+test('the journal supplies a post-payout execution split without rewriting cash, raw fills or completed trades',async()=>{
+ await withSettledClock(async()=>{
+  const account='LFF05000000000031',cut='2026-10-19T15:00:00.000Z';
+  await integrationTrade(account,'cycle-earlier','2026-10-19T14:00:00Z','2026-10-19T14:01:00Z',100,200.5);
+  await server.saveAccountState(integrationCapture(account,54000,'2026-10-19T14:59:00.000Z'));
+  await server.saveAccountState(integrationCapture(account,52000,cut));
+  await integrationTrade(account,'cycle-later','2026-10-19T15:01:00Z','2026-10-19T15:02:00Z',100,175.5);
+  const raw=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),cash=await server.loadJournal();
+  const split=cash.realizedCheckpoints!.filter(row=>row.account===account);assert.equal(split.length,1);
+  assert.equal(split[0].capturedAt,cut);assert.equal(split[0].net,200);assert.equal(split[0].afterNet,150);
+  const {accountFlexProgress}=require('../lib/account-display')as typeof import('../lib/account-display');
+  const progress=accountFlexProgress(account,cash);assert.equal(progress?.payout.days,1);assert.equal(progress?.payout.remaining,4);assert.equal(progress?.payout.payoutResetAt,cut);
+  const again=await server.loadJournal();assert.deepEqual(again.cash,cash.cash);assert.deepEqual(again.trades,cash.trades);assert.deepEqual(again.realizedCheckpoints,cash.realizedCheckpoints);assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);
+ });
+});

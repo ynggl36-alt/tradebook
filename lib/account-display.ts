@@ -39,7 +39,7 @@ export function accountCardGroups(accounts:AccountState[],journal:Journal,profil
   return {state,profile,stage:accountStage(state.account,profile,reference),progress:accountFlexProgress(state.account,journal,now,tradesByAccount?.get(state.account),profile)};
  });
  return [
-  {stage:'Funded',title:'Funded accounts',description:'Closest by qualifying days · cycles needing a check last'},
+  {stage:'Funded',title:'Funded accounts',description:'Closest by qualifying days · incomplete history last'},
   {stage:'Evaluation',title:'Evaluation accounts',description:'Closest to the profit target · unconfirmed targets last'},
   {stage:'Unclassified',title:'Other accounts',description:'Account stage needs classification'},
  ].map(group=>({...group,accounts:cards.filter(card=>group.stage==='Unclassified'?!['Funded','Evaluation'].includes(card.stage):card.stage===group.stage).sort(compareCards)})).filter(group=>group.accounts.length>0);
