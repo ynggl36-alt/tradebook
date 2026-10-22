@@ -4,10 +4,11 @@ import Module from 'node:module';
 
 let requestHeaders = new Headers();
 let journalReads = 0;
-let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0,gapReads=0,trendReads=0,dayBalanceReads=0;
+let accountReads=0,accountWrites=0,firmWrites=0,firmPayoutWrites=0,gapReads=0,trendReads=0,dayBalanceReads=0,dailyLossReads=0;
 const importedPayloads:Record<string,unknown>[]=[];
 const originalLoad = (Module as any)._load;
 (Module as any)._load = function(name: string, ...rest: any[]) {
+  if(name==='../../../lib/server-daily-loss')return {loadDailyLoss:async()=>{dailyLossReads++;return {version:'realized-session-v1',rows:[],unavailable:[]};}};
   if(name==='../../../lib/server-calendar-accounts')return {loadAccountDayBalances:async(payload:{day:string})=>{dayBalanceReads++;return {day:payload.day,asOf:'2026-10-21T20:00:00.000Z',accounts:[]};}};
   if(name==='../../../lib/server-trendline-entries')return {loadTrendEntries:async()=>{trendReads++;return {version:'trendline-pilot-v1',rows:[],missing:[]};}};
   if(name==='../../../lib/server-gap-context')return {loadGapContexts:async()=>{gapReads++;return {version:'weekly-gap-context-v1',rows:[],missing:[]};}};
@@ -29,6 +30,21 @@ const originalLoad = (Module as any)._load;
 const auth = require('../app/chatgpt-auth') as typeof import('../app/chatgpt-auth');
 const route = require('../app/api/[...path]/route') as typeof import('../app/api/[...path]/route');
 (Module as any)._load = originalLoad;
+
+test('daily loss uses authenticated same-origin bounded reads and the same private maintenance loader without loading the journal',async()=>{
+ const payload={accounts:['SYNTHETIC-DAILY-LOSS'],start:'2026-10-21',end:'2026-10-21',stage:'all'},reads=journalReads,writes=accountWrites;
+ const request=(path='daily-loss',origin='https://journal.example',body=JSON.stringify(path==='maintenance'?{action:'daily-loss',payload}:payload))=>new Request('https://journal.example/api/'+path,{method:'POST',headers:{Origin:origin},body});
+ requestHeaders=new Headers();assert.equal((await route.POST(request())).status,401);assert.equal(dailyLossReads,0);
+ requestHeaders=new Headers({'oai-authenticated-user-email':'owner@example.test'});
+ assert.equal((await route.POST(request('daily-loss','https://other.example'))).status,403);assert.equal(dailyLossReads,0);
+ assert.equal((await route.POST(request('daily-loss','https://journal.example',JSON.stringify({...payload,pad:'界'.repeat(2700)})))).status,413);assert.equal(dailyLossReads,0);
+ const result=await route.POST(request());assert.equal(result.status,200);assert.equal(result.headers.get('Cache-Control'),'no-store');assert.equal(dailyLossReads,1);
+ assert.equal((await route.GET(new Request('https://journal.example/api/daily-loss'))).status,404);
+ requestHeaders=new Headers();assert.equal((await route.POST(request('maintenance','https://other.example'))).status,403);assert.equal(dailyLossReads,1);
+ assert.equal((await route.POST(request('maintenance'))).status,200);assert.equal(dailyLossReads,2);
+ assert.equal((await route.POST(request('maintenance','https://journal.example',JSON.stringify({action:'daily-loss',payload:{...payload,pad:'界'.repeat(2700)}})))).status,413);assert.equal(dailyLossReads,2);
+ assert.equal(journalReads,reads);assert.equal(accountWrites,writes);
+});
 
 test('daily account balances require native sign-in or private maintenance access, bounded bodies and same-origin requests',async()=>{
  const payload={day:'2026-10-21',accounts:['TEST-ACCOUNT']};

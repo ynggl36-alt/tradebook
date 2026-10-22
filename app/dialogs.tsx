@@ -12,12 +12,14 @@ import {AccountSelector,accountDisplayName} from './account-selector';
 import {netTradePnl,netTradeSummary,tradeCommission} from '../lib/trading-costs';
 import type {FirmReference} from '../lib/firm-reference';
 import {accountStage} from '../lib/lucid-flex';
+import {accountScopeTrades} from '../lib/account-scope';
+import type {AccountScope} from '../lib/account-scope';
 
-export type AccountScope={start:string;end:string;symbol?:string;label?:string};
+export type {AccountScope} from '../lib/account-scope';
 export function AccountDialog({account,journal,profiles,notes,onTrade,onClose,onSave,onSaveFirm,busy,scope,pnlMode='gross'}:{account:string;journal:Journal;profiles:Map<string,AccountProfile>;notes:Map<string,TradeNote>;onTrade:(t:Trade,pnlMode?:'gross'|'net')=>void;onClose:()=>void;onSave:(p:AccountProfile)=>Promise<boolean>;onSaveFirm:(r:FirmReference)=>Promise<boolean>;busy:boolean;scope?:AccountScope;pnlMode?:'gross'|'net'}){
  const [profile,setProfile]=useState<AccountProfile>(()=>({...profiles.get(account),account,label:profiles.get(account)?.label||'',stage:accountStage(account,profiles.get(account),journal.firmReferences?.find(r=>r.account===account)),status:profiles.get(account)?.status||'Unclassified',notes:profiles.get(account)?.notes||''})),[copied,setCopied]=useState(false);
  const bounds=scope||yearBounds(),scopeSymbol=scope?.symbol&&scope.symbol!=='all'?scope.symbol:null;
- const trades=useMemo(()=>journal.trades.filter(t=>t.account===account&&centralDay(t.exit)>=bounds.start&&centralDay(t.exit)<=bounds.end&&(!scopeSymbol||t.symbol===scopeSymbol)),[journal.trades,account,bounds.start,bounds.end,scopeSymbol]);
+ const trades=useMemo(()=>accountScopeTrades(journal.trades,account,{...bounds,symbol:scopeSymbol||'all',basis:scope?.basis}),[journal.trades,account,bounds.start,bounds.end,scopeSymbol,scope?.basis]);
  const costs=useMemo(()=>netTradeSummary(trades),[trades]),netMode=pnlMode==='net',available=!netMode||costs.complete,analysis=netMode?costs.trades:trades,s=summarize(analysis),source=journal.accounts.find(a=>a.account===account);
  const issues=(source?.issues||[]).filter(issue=>!issue.reason.startsWith('Unclosed'));
  const scopeLabel=scope?.label||(scope?dateLabel(bounds.start,true)+' – '+dateLabel(bounds.end,true)+', 2026':'All 2026 trades');

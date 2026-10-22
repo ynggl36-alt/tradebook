@@ -16,6 +16,14 @@ export const KNOWN_FIRM_ADJUSTMENTS=firmNotices as FirmAdjustmentNotice[];
 import type {BalanceObservation,BalanceInterval,AdjustmentLabel,BalanceTracking} from './balance-adjustments';
 
 const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];nextFutureAt?:number}>();
+// Read-only access for bounded diagnostics. A caller must verify history size
+// and revision first; a due future execution invalidates this cached ledger.
+// This never warms the cache or updates journal metadata.
+export function cachedRealizedEvents(account:string,revision:number,asOf:number):readonly RealizedEvent[]|null{
+ const cached=realizedCache.get(account);
+ if(!cached||cached.revision!==revision||(cached.nextFutureAt!==undefined&&cached.nextFutureAt<=asOf))return null;
+ return cached.events.filter(event=>Date.parse(event.time)<=asOf);
+}
 export async function bumpJournalRevision(){await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)").run();}
 export async function loadJournalVersion(asOf=Date.now()){
  const [changes,last]=await Promise.all([db().prepare("SELECT key,value FROM journal_meta WHERE key IN ('change_revision','last_balance_change','next_future_fill')").all<{key:string;value:string}>(),db().prepare('SELECT MAX(updated) AS updated FROM account_history').first<{updated:string}>()]);

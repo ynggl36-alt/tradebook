@@ -11,6 +11,8 @@ import {loadPriceBars,savePriceBars,loadWeeklyGapBars} from '../../../lib/server
 import {loadGapContexts} from '../../../lib/server-gap-context';
 import {loadTrendEntries} from '../../../lib/server-trendline-entries';
 import {loadAccountDayBalances} from '../../../lib/server-calendar-accounts';
+import {loadDailyLoss} from '../../../lib/server-daily-loss';
+import {DAILY_LOSS_REQUEST_BYTES} from '../../../lib/daily-loss';
 
 export const dynamic='force-dynamic';
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
@@ -28,6 +30,10 @@ async function handle(request:Request){
       if(body.action==='firm-reference')return json(await saveFirmReference(body.payload??{}));
       if(body.action==='account-profile')return json(await saveProfile(body.payload??{}));
       if(body.action==='account-day-balances')return json(await loadAccountDayBalances(body.payload??{}));
+      if(body.action==='daily-loss'){
+        if(new TextEncoder().encode(JSON.stringify(body.payload??{})).length>DAILY_LOSS_REQUEST_BYTES)return json({error:'Daily loss requests must be under 8 KB.'},413);
+        return json(await loadDailyLoss(body.payload));
+      }
       if(body.action==='import')return json(await importExecutions(body.payload??{}));
       if(body.action==='firm-payout-import')return json(await importFirmPayouts(body.payload??{}));
       if(body.action==='verify'){
@@ -44,6 +50,10 @@ async function handle(request:Request){
       return json({error:'Unknown maintenance operation.'},400);
     }
     if(!await getChatGPTUser())return json({error:'Sign in with ChatGPT to open your private journal.'},401);
+    if(path==='daily-loss'&&method==='POST'){
+      const raw=await request.text();if(new TextEncoder().encode(raw).length>DAILY_LOSS_REQUEST_BYTES)return json({error:'Daily loss requests must be under 8 KB.'},413);
+      return json(await loadDailyLoss(JSON.parse(raw)));
+    }
     if(path==='account-day-balances'&&method==='POST'){
       const raw=await request.text();if(new TextEncoder().encode(raw).length>90000)return json({error:'Daily balance requests must be under 90 KB.'},413);
       return json(await loadAccountDayBalances(JSON.parse(raw)));
