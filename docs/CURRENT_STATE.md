@@ -33,6 +33,8 @@
 
 ## Work queue
 
+Current ownership, task status and resumable checkpoints live in [coordination issue #21](https://github.com/ynggl36-alt/tradebook/issues/21) and its linked task/PR discussions. The dated branch records below describe implementation history; they are not active task claims.
+
 Owner task (2026-10-21), branch `agent/owner/calibration-refinement-20261021`: refine the October 7–20 entry pilot after owner feedback. Owns 5m/15m geometry, per-edge prominence/coverage, causal role reversals, stricter observed-interaction counts, shared 35-day price context/range helpers, worker/panel/chart/evidence integration and synthetic regressions. One-minute prices retain timing only. The original C1–C15 mapping and corrected feedback are frozen privately; new R labels identify the revised outcome-blind selection, not the old cases or independent validation. No accounting, raw history, review tags, recorder or schema writes.
 
 Owner-authorized task (2026-10-21), branch `agent/owner/payout-posting-lag-20261021`: offset exact opposite automatic balance residuals caused by short trading/cash posting lag. Owns the balance-adjustment derivation, payout exception filtering, the narrow payout-cycle offset guard, focused synthetic derivation/rendered regressions and this document. No competing PR at task start. Ordinary funded deductions retain the full-amount policy without eligibility, amount-range, position, provenance or recorder-cadence gates. No persisted cash, raw observation/execution, recorder or schema writes.
