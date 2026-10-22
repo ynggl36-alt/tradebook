@@ -9,7 +9,10 @@ import {planFirmPayoutImport,payoutSummary,validateFirmPayout} from './payouts';
 import type {AccountMonitor,AccountState,AccountStateData} from './account-state';
 import {aggregateRealized,realizedEvents,realizedCheckpoint} from './realized';
 import type {RealizedDay,RealizedEvent} from './realized';
-import {canonicalJson,observation,deriveBalanceAdjustments,KNOWN_FIRM_ADJUSTMENTS} from './balance-adjustments';
+import firmNotices from '../data/firm-adjustments.json';
+import {canonicalJson,observation,deriveBalanceAdjustments} from './balance-adjustments';
+import type {FirmAdjustmentNotice} from './balance-adjustments';
+export const KNOWN_FIRM_ADJUSTMENTS=firmNotices as FirmAdjustmentNotice[];
 import type {BalanceObservation,BalanceInterval,AdjustmentLabel,BalanceTracking} from './balance-adjustments';
 
 const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];nextFutureAt?:number}>();
@@ -82,7 +85,7 @@ export async function saveAccountState(input:unknown){
   const latest=await db().prepare("SELECT captured_at AS capturedAt FROM recorder_status WHERE id='latest'").first<{capturedAt:string}>();
   return {accepted:results[0].meta.changes===1,capturedAt:latest?.capturedAt||capture.capturedAt};
 }
-async function loadBalanceData(cash:CashRecord[]){
+async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmReferences:FirmReference[]){
  const [pairs,labels,tracking]=await Promise.all([
   db().prepare(`WITH retained AS (
    SELECT id,account,captured_at,cash_value,json_extract(data,'$.state.values.CashValue.at') AS cash_at,COALESCE(json_extract(data,'$.state.values.RealizedProfitLoss.value'),0) AS realized
@@ -98,7 +101,7 @@ async function loadBalanceData(cash:CashRecord[]){
  ]);
  const intervals:BalanceInterval[]=pairs.results.map(row=>({before:{...JSON.parse(row.previous),receivedAt:row.previous_received},after:{...JSON.parse(row.data),receivedAt:row.received_at},gap:!!row.gap}));
  const events=new Map([...realizedCache].map(([account,cache])=>[account,cache.events]));
- return {adjustments:deriveBalanceAdjustments(intervals,events,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel)),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
+ return {adjustments:deriveBalanceAdjustments(intervals,events,cash,labels.results.map(row=>JSON.parse(row.data)as AdjustmentLabel),Date.now(),KNOWN_FIRM_ADJUSTMENTS,{profiles,firmReferences}),balanceTracking:tracking??{observations:0,first:null,last:null},firmAdjustments:KNOWN_FIRM_ADJUSTMENTS};
 }
 export async function saveAdjustmentLabel(input:Record<string,unknown>){
  const id=text(input.id,500),kind=text(input.kind,30);if(!['automatic','payout','firm-adjustment','unexplained','ignore'].includes(kind))throw new Error('Choose a payout, firm adjustment, unexplained change or ignored change.');
@@ -163,7 +166,7 @@ export async function loadJournal():Promise<Journal>{
   const futureTimes=[...realizedCache.values()].flatMap(cache=>cache.nextFutureAt!==undefined?[cache.nextFutureAt]:[]),nextFuture=futureTimes.length?new Date(Math.min(...futureTimes)).toISOString():null;
   if(nextFuture)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('next_future_fill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value").bind(nextFuture).run();
   else await db().prepare("DELETE FROM journal_meta WHERE key='next_future_fill'").run();
-  const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash);
+  const cash=cs.results.map(r=>JSON.parse(r.data)as CashRecord),balanceData=await loadBalanceData(cash,ps.results.map(row=>JSON.parse(row.data)as AccountProfile),firmReferences);
   const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=firmReferences.flatMap(ref=>ref.flex?[realizedCheckpoint(ref.account,ref.flex.capturedAt,realizedCache.get(ref.account)?.events||[])]:[]);
   return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,...balanceData,revision:readingVersion.revision,trades:hs.results.flatMap(h=>JSON.parse(h.trades_data)).filter(trade=>Date.parse(trade.exit)<=asOf),accounts:hs.results.map(h=>JSON.parse(h.summary_data)),
     profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash,imports:im.results as unknown as Journal['imports'],lastSaved:last?.updated||'',seedVersion:version?.value||''};

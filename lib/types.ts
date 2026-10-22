@@ -21,10 +21,12 @@ export type CashRecord = {
   date: string; account: string; deduction: number | null; received: number | null;
   expense: number | null; note: string;
   firmPayout?:{firm:string;currency:'USD';amount:number;requestedDate:string;approvedDate:string;status:'Paid';source:string};
+  // Historical source metadata is retained for backup compatibility only.
   payoutAmountBasis?:'gross-request'|'trader-share'|'unknown';
   payoutSplit?:number;
   payoutApprovalAt?:string;
 };
+export type CostRecord = CashRecord & {kind:Exclude<CashRecord['kind'],'payout'>};
 export type ImportRecord = {id: string; source: string; added: number; duplicates: number; importedAt: string};
 export type AccountSummary = {account: string; fills: number; issues: HistoryIssue[]; first: string; last: string};
 export type Journal = {

@@ -1,16 +1,12 @@
 import type {CashRecord} from './types';
-export const LUCID_TRADER_SPLIT=.9;
-export const LUCID_SPLIT_URL='https://support.lucidtrading.com/en/articles/12945796-lucidflex-payouts';
-export function payoutProceeds(record:CashRecord):{gross:number|null;expected:number|null;actual:number|null;split:number|null;basis:'confirmed-receipt'|'gross-request'|'trader-share'|'unknown'}{
- if(record.kind!=='payout')return {gross:null,expected:null,actual:null,split:null,basis:'unknown'};
- const lucid=/^LFF050\d+$/i.test(record.account),split=record.payoutSplit??(lucid?LUCID_TRADER_SPLIT:null),basis=record.payoutAmountBasis??(lucid?'gross-request':'unknown');
- const amount=record.firmPayout?.amount??null,gross=record.deduction??(basis==='gross-request'?amount:null);
- const expected=record.received??(basis==='trader-share'?amount:gross!==null&&split!==null?Math.round(Math.round(gross*100)*split)/100:null);
- return {gross,expected,actual:record.received,split,basis:record.received!==null?'confirmed-receipt':basis};
+// Account deductions take precedence. Historical source amounts are retained
+// exactly as supplied; no firm's split is applied or reversed.
+export function payoutProceeds(record:CashRecord):{gross:number|null}{
+ return {gross:record.kind==='payout'?record.deduction??record.firmPayout?.amount??record.received:null};
 }
 export function payoutIncomeSummary(rows:CashRecord[]){
  const payouts=rows.filter(r=>r.kind==='payout'),values=payouts.map(payoutProceeds),sum=(numbers:number[])=>numbers.reduce((s,n)=>s+Math.round(n*100),0)/100;
- return {count:payouts.length,gross:values.some(v=>v.gross!==null)?sum(values.flatMap(v=>v.gross===null?[]:[v.gross])):null,expected:values.length&&values.every(v=>v.expected!==null)?sum(values.map(v=>v.expected!)):null,actual:values.some(v=>v.actual!==null)?sum(values.flatMap(v=>v.actual===null?[]:[v.actual])):null,estimatedCount:values.filter(v=>v.actual===null&&v.expected!==null).length};
+ return {count:payouts.length,gross:values.length&&values.every(v=>v.gross!==null)?sum(values.map(v=>v.gross!)):null};
 }
 export type FirmPayout=NonNullable<CashRecord['firmPayout']>;
 function text(value:unknown,max:number){if(typeof value!=='string'||!value.trim()||value.length>max||/[\u0000-\u001f]/.test(value))throw new Error('Missing or invalid payout information.');return value.trim();}
@@ -24,9 +20,9 @@ export function validateFirmPayout(input:unknown):FirmPayout{
  return {firm:text(f.firm,80),currency:'USD',amount:Math.round(f.amount*100)/100,requestedDate,approvedDate,status:'Paid',source:text(f.source,300)};
 }
 export function payoutSummary(rows:CashRecord[]){
- const payouts=rows.filter(r=>r.kind==='payout'),firm=payouts.filter(r=>r.firmPayout?.status==='Paid'),received=payouts.filter(r=>r.received!==null),deductions=payouts.filter(r=>r.deduction!==null);
+ const payouts=rows.filter(r=>r.kind==='payout'),firm=payouts.filter(r=>r.firmPayout?.status==='Paid'),deductions=payouts.filter(r=>r.deduction!==null);
  const sum=(values:number[])=>values.reduce((s,v)=>s+Math.round(v*100),0)/100;
- return {firmCount:firm.length,firmAccounts:new Set(firm.map(r=>r.account)).size,firmAmount:firm.length?sum(firm.map(r=>r.firmPayout!.amount)):null,receivedCount:received.length,received:received.length?sum(received.map(r=>r.received!)):null,deductions:deductions.length?sum(deductions.map(r=>r.deduction!)):null,awaitingBank:firm.filter(r=>r.received===null).length};
+ return {...payoutIncomeSummary(rows),firmCount:firm.length,firmAccounts:new Set(firm.map(r=>r.account)).size,firmAmount:firm.length?sum(firm.map(r=>r.firmPayout!.amount)):null,deductions:deductions.length?sum(deductions.map(r=>r.deduction!)):null};
 }
 export function planFirmPayoutImport(input:unknown,existing:CashRecord[]){
  if(!Array.isArray(input)||!input.length||input.length>200)throw new Error('Import 1 to 200 firm payout confirmations at a time.');

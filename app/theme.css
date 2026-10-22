@@ -295,7 +295,7 @@ th { font-size:10px; }
 td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .profile-form label,.cash-form label { font-size:11px; }
 .flex-progress-title>small,.flex-progress>p,.flex-progress>.flex-today,.flex-eval-facts,.flex-rule-details { font-size:11px; line-height:1.7; }
-.firm-payout-record p,.firm-paid-label { font-size:11px; }
+.firm-payout-record p { font-size:11px; }
 @media(max-width:760px) {
  .outcome-summary { display:block; }
  .account-headline-values .account-cash>strong { font-size:25px; }
@@ -332,16 +332,6 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
  .stat-label { font-size:11px; }
  .account-state-stats .stat-value { font-size:23px; }
 }
-.payout-derived { display:flex; flex-direction:column; justify-content:center; gap:8px; border:1px solid var(--accent-border); border-radius:7px; padding:13px 15px; background:var(--accent-bg); }
-.payout-derived>span { font-size:11px; color:var(--text-secondary); }
-.payout-derived>strong { font-size:24px; font-weight:600; color:var(--accent-ink); letter-spacing:-.6px; }
-.payout-derived>small { font-size:10px; color:var(--text-secondary); line-height:1.6; }
-.cash-payout-details { border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin:0 0 21px; }
-.cash-payout-details>summary { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-secondary); font-weight:550; cursor:pointer; padding:15px 0; list-style:none; }
-.cash-payout-details>summary::-webkit-details-marker { display:none; }
-.cash-payout-details>summary>svg { margin-left:auto; }
-.cash-payout-details[open]>summary>svg { transform:rotate(90deg); }
-.cash-payout-details .form-help { margin:0 0 17px; }
 .checkpoint-payout-confirmation { padding:15px; margin:0 0 18px; border:1px solid var(--warning-border); border-radius:7px; background:var(--warning-bg); color:var(--warning); }
 .checkpoint-payout-confirmation>strong { font-size:11px; font-weight:600; }
 .checkpoint-payout-confirmation>ul { padding-left:18px; font-size:11px; line-height:1.8; margin:10px 0 14px; }
@@ -353,25 +343,15 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
 .cash-view-intro>div>strong { display:block; font-size:14px; color:var(--ink); font-weight:550; }
 .cash-view-intro>div>p { max-width:660px; font-size:11px; line-height:1.8; color:var(--text-secondary); margin-top:7px; }
 .cash-view-intro>.button { flex-shrink:0; }
-.cash-recorded-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.cash-recorded-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .cash-record-note { max-width:270px; white-space:normal; line-height:1.7; }
-.recorded-cash-table td.amount>small { white-space:normal; max-width:210px; margin-left:auto; line-height:1.6; font-weight:400; }
-.cash-records-footer { display:flex; align-items:flex-start; justify-content:space-between; gap:15px 25px; flex-wrap:wrap; padding:17px 23px; border-top:1px solid var(--line); font-size:11px; color:var(--text-secondary); }
-.cash-records-footer>span { padding:2px 0; line-height:1.7; }
-.manual-payout-tools { max-width:390px; margin-left:auto; }
-.manual-payout-tools>summary { display:flex; align-items:center; justify-content:flex-end; gap:9px; font-size:11px; font-weight:550; cursor:pointer; list-style:none; padding:2px 0; color:var(--text-secondary); }
-.manual-payout-tools>summary::-webkit-details-marker { display:none; }
-.manual-payout-tools[open]>summary>svg { transform:rotate(90deg); }
-.manual-payout-tools>div { padding-top:12px; }
-.manual-payout-tools p { font-size:11px; line-height:1.8; margin-bottom:12px; }
+.recorded-cash-table tbody tr { cursor:default; }
+.recorded-cash-table tbody tr.editable-cost { cursor:pointer; }
 .cash-source-note { font-size:11px; line-height:1.8; color:var(--text-secondary); padding:0 23px 21px; }
 .adjustments-table th { font-size:10px; }
 .adjustments-table>tbody>tr:not(.adjustment-review-row)>td { padding-top:16px; padding-bottom:15px; }
 .adjustments-table td>.account-text { margin-top:6px; }
-.adjustment-state,.adjustment-kind { display:inline-flex; align-items:center; font-size:11px; line-height:1.6; }
-.adjustment-state { padding:4px 7px; border-radius:4px; color:var(--text-secondary); background:var(--surface-soft); }
-.adjustment-state.settled { color:var(--accent-ink); background:var(--accent-bg); }
-.adjustment-state.provisional { color:var(--warning); background:var(--warning-bg); }
+.adjustment-kind { display:inline-flex; align-items:center; font-size:11px; line-height:1.6; }
 .adjustment-kind { font-weight:550; }
 .adjustment-kind.likely-payout,.adjustment-kind.payout { color:var(--accent-ink); }
 .adjustment-review-row>td { padding:0!important; background:var(--surface-soft); white-space:normal; border-bottom:1px solid var(--line); }
@@ -415,9 +395,6 @@ td small,.tag-add,.pagination,.account-text,.status-tag { font-size:11px; }
  .cash-recorded-stats { grid-template-columns:1fr; }
  .cash-recorded-stats .stat-value { font-size:27px; }
  .cash-view-intro { align-items:flex-start; gap:13px; }
- .cash-records-footer { padding:16px 18px; }
- .manual-payout-tools { margin-left:0; width:100%; max-width:none; }
- .manual-payout-tools>summary { justify-content:flex-start; }
  .cash-source-note { padding:0 18px 20px; }
  .adjustment-review>summary { padding:11px 18px; }
  .adjustment-review-body { padding:8px 18px 20px; }
