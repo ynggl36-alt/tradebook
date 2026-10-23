@@ -420,6 +420,22 @@ test('late native snapshots reconcile a position-metadata disagreement from an e
  });
 });
 
+test('native idle reset recovery retains a finished session but a saved disappearance blocks it after reconnect',async()=>{
+ await withSettledClock(async()=>{
+  const account='LFF05000000000043',time=(m:number)=>'2026-10-21T14:'+String(m).padStart(2,'0')+':00.000Z';
+  await server.saveAccountState(integrationCapture(account,50000,time(0)));
+  await integrationTrade(account,'idle-counter',time(1),time(2),100,180);
+  const snapshot=(m:number,net:number)=>{const capture=integrationCapture(account,50159,time(m));(capture.accounts[0].values as any).RealizedProfitLoss={value:net,at:time(m),source:'PlatformRead'};return capture;};
+  await server.saveAccountState(snapshot(3,159));
+  const before=await server.loadJournal(),raw=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account);
+  await server.saveAccountState(snapshot(4,0));const idle=await server.loadJournal();assert.equal(idle.reportedSessions!.find(row=>row.account===account)?.net,159);
+  await server.saveAccountState({...snapshot(5,0),accounts:[]});await server.saveAccountState(snapshot(6,0));
+  assert.ok(accountObservations(account).some(row=>row.origin==='not-seen'));
+  const reappeared=await server.loadJournal();assert.equal(reappeared.reportedSessions!.some(row=>row.account===account),false);
+  assert.deepEqual(reappeared.cash,before.cash);assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);
+ });
+});
+
 test('evaluation breach evidence refreshes on floating loss and survives disappearance without changing source history or manual profiles',async()=>{
  const account='LFE05000000000991',before=await server.loadJournal(),at='2026-10-22T14:00:00.000Z';
  const snapshot=(capturedAt:string,cash:number,floating:number,positions:any[]=[])=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFE','LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Synthetic',provider:'Synthetic',values:{CashValue:{value:cash,at:capturedAt,source:'PlatformRead'},UnrealizedProfitLoss:{value:floating,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions}]});

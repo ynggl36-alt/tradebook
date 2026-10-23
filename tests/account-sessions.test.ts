@@ -101,8 +101,33 @@ test('the same verified prefix reconciles balance changes and payout checkpoints
 test('later unresolved fills, future records and counter resets cannot extend a reconciled prefix',()=>{
  const fills=[...disputed(),fill(5,'Buy',5,220,9,7)],native=reconcile(fills,[flatRow(),positioned(6,254)]);
  assert.equal(native.sessions.length,0);assert.equal(native.reconciledEvents.get(account)!.at(-1)!.coverageIssues,1);assert.equal(reportedCheckpoint(account,time(7),native,realizedEvents(account,fills)),null);
- const reset=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254})]);assert.equal(reset.sessions.length,0);
+ const reset=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50250})]);assert.equal(reset.sessions.length,0);
  const future=positioned(10,254);assert.equal(reconcile(disputed(),[flatRow(),future]).sessions.length,0);
+});
+
+test('an idle zero counter reset retains the corroborated flat session without verifying the reset as trading P&L',()=>{
+ const fills=disputed(),rows=[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254}),positioned(8,0,[],{cash:50254})],before=JSON.stringify({fills,rows}),native=reconcile(fills,rows);
+ assert.deepEqual(native.sessions,[{account,day,net:254,at:time(6),through:time(6)}]);
+ assert.equal(flexPayoutDays(account,[],[],Date.parse(time(9)),{sessions:aggregateRealized(realizedEvents(account,fills),'session'),reportedSessions:native.sessions}).days,1);
+ assert.equal(reportedTradingDelta(account,time(6),time(7),native.readings),null);
+ assert.equal(reportedCheckpoint(account,time(7),native,realizedEvents(account,fills)),null);
+ assert.equal(JSON.stringify({fills,rows}),before);
+});
+
+test('zero counter resets require unchanged cash, fresh flat positions, no later fills and the same reporting series',()=>{
+ for(const patch of [{cash:50253},{netAt:time(6)},{positionsAvailable:0},{positionsAt:time(6)},{positionData:'not-json'},{positionData:JSON.stringify([{instrument:'MNQ 12-26',side:'Long',quantity:1}])},{connection:'Other'},{provider:'Other'}] satisfies Partial<NativePnlRow>[]){
+  const native=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254,...patch})]);assert.equal(native.sessions.length,0,JSON.stringify(patch));
+ }
+ const open=[{instrument:'MNQ 12-26',side:'Long',quantity:1}],fills=[...disputed(),fill(5,'Buy',1,220,1,7)];
+ assert.equal(reconcile(fills,[flatRow(),positioned(6,254),positioned(8,0,[],{cash:50254})]).sessions.length,0);
+ assert.equal(reconcile(disputed(),[flatRow(),positioned(6,254,open),positioned(7,0,[],{cash:50254})]).sessions.length,0);
+ const next='2026-10-20T23:00:00.000Z',native=reportedAccountSessions([flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254,capturedAt:next,cashAt:next,netAt:next,positionsAt:next})],new Map([[account,realizedEvents(account,disputed())]]),Date.parse(next),new Map([[account,disputed()]]));
+ assert.equal(native.sessions.some(row=>row.day==='2026-10-21'),false);
+ const lower=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,10,[],{cash:50010})]);assert.equal(lower.sessions[0].net,10);
+ for(const patch of [{cash:50250,netAt:time(6)},{netAt:time(6)},{cashAt:time(6)},{positionsAt:time(6)},{connected:0},{currency:'CAD'},{connection:'Other'},{provider:'Other'}] satisfies Partial<NativePnlRow>[]){
+  const interrupted=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254,...patch}),positioned(8,0,[],{cash:50254})]);assert.equal(interrupted.sessions.length,0,JSON.stringify(patch));
+ }
+ const staleLast=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50254}),positioned(8,0,[],{cash:50254,netAt:time(7)})]);assert.equal(staleLast.sessions.length,0);
 });
 test('independent end-to-end verification can reconstruct an earlier checkpoint, while an as-of read cannot use future verification',()=>{
  const fills=disputed(),native=reconcile(fills),checkpoint=reportedCheckpoint(account,time(3),native,realizedEvents(account,fills))!;

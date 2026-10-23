@@ -12,8 +12,8 @@ export const nativeReadingKey=(account:string,at:string)=>account+'@'+at;
 const series=(r:NativePnlReading)=>JSON.stringify([r.account,r.connection,r.provider,flexSession(r.at)]);
 const clean=(event:RealizedEvent)=>event.net!==null&&!event.unmatched&&!event.coverageIssues;
 const connectionKey=(row:{account:string;connection:string;provider:string})=>JSON.stringify([row.account,row.connection,row.provider]);
-function currentPositions(row:NativePnlRow):Map<string,number>|null{
- if(!row.positionsAvailable||row.positionsAt!==row.capturedAt||typeof row.positionData!=='string')return null;
+function currentPositions(row:NativePnlRow|undefined):Map<string,number>|null{
+ if(!row||!row.positionsAvailable||row.positionsAt!==row.capturedAt||typeof row.positionData!=='string')return null;
  try{
   const raw=JSON.parse(row.positionData);if(!Array.isArray(raw)||raw.length>100)return null;
   const positions=new Map<string,number>();
@@ -41,7 +41,9 @@ function positionsAgree(projection:Projection,point:NativePnlRow){
 export function reportedAccountSessions(rows:readonly NativePnlRow[],eventsByAccount:ReadonlyMap<string,readonly RealizedEvent[]>,asOf=Date.now(),fillsByAccount:ReadonlyMap<string,readonly Fill[]>=new Map()){
  const readings=new Map<string,NativePnlReading>(),sessions=new Map<string,ReportedSession>(),latest=new Map<string,string>();
  const groups=new Map<string,NativePnlReading[]>(),snapshots=new Map<string,NativePnlRow>(),flat=new Map<string,NativePnlRow[]>(),candidates=new Map<string,Projection|null>(),projections=new Map<string,Projection>();
+ const observations=new Map<string,NativePnlRow[]>();
  for(const row of rows){
+  if(Number.isFinite(Date.parse(row.capturedAt))&&Date.parse(row.capturedAt)<=asOf){const key=row.account+'|'+flexSession(row.capturedAt),group=observations.get(key)||[];group.push(row);observations.set(key,group);}
   if(row.connected&&row.currency==='USD'&&Number.isFinite(Date.parse(row.capturedAt))&&Date.parse(row.capturedAt)<=asOf){
    snapshots.set(nativeReadingKey(row.account,row.capturedAt),row);
    const positions=currentPositions(row);if(positions?.size===0){const key=connectionKey(row),group=flat.get(key)||[];group.push(row);flat.set(key,group);}
@@ -81,8 +83,17 @@ export function reportedAccountSessions(rows:readonly NativePnlRow[],eventsByAcc
    previous=point;
   }
  }
- const currentSessions=[...sessions.values()].filter(row=>row.at===latest.get(row.account+'|'+row.day)).flatMap(row=>{
+ const currentSessions=[...sessions.values()].flatMap(row=>{
   const events=eventGroups.get(JSON.stringify([row.account,row.day]))||[],tail=events.filter(e=>Date.parse(e.time)>Date.parse(row.at));
+  const later=(observations.get(row.account+'|'+row.day)||[]).filter(point=>Date.parse(point.capturedAt)>Date.parse(row.at));
+  if(row.at!==latest.get(row.account+'|'+row.day)||(row.net!==0&&later.some(point=>point.net===0))){
+   // A reporting counter can reset before the futures session ends. Retain
+   // the checked result only while the account stays flat and cash unchanged,
+   // with no later fills. Reset readings themselves never become verified P&L.
+   const last=readings.get(nativeReadingKey(row.account,row.at)),points=last?(groups.get(series(last))||[]).filter(point=>Date.parse(point.at)>Date.parse(row.at)):[];
+   if(!last||tail.length||!points.length||points.at(-1)!.at!==latest.get(row.account+'|'+row.day)||currentPositions(snapshots.get(nativeReadingKey(row.account,row.at)))?.size!==0)return [];
+   if(later.some(point=>!point.connected||point.currency!=='USD'||point.connection!==last.connection||point.provider!==last.provider||point.netAt!==point.capturedAt||point.net!==0||point.cashAt!==point.capturedAt||point.cash===null||!Number.isFinite(point.cash)||Math.abs(point.cash-last.cash)>=.005||currentPositions(point)?.size!==0))return [];
+  }
   if(tail.length&&events.some(e=>!clean(e)))return [];
   const through=tail.length?new Date(Math.max(...tail.map(e=>Date.parse(e.time)))).toISOString():row.at;
   return [{...row,net:round(row.net+tail.reduce((sum,e)=>sum+e.net!,0)),through}];

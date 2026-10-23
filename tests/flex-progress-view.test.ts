@@ -15,12 +15,12 @@ test('funded cards show an automatic reset without needing any manual firm check
 });
 test('missing post-payout fees explain unavailable days instead of prompting a manual cycle reset',()=>{
  const journal=data();journal.realizedCheckpoints=[{account,capturedAt:cut,session:'2026-10-22',net:200,afterNet:null}];
- const html=render(journal);assert.match(html,/1 payout/);assert.match(html,/Waiting for latest P&amp;L/);assert.match(html,/Commission data is incomplete/);assert.doesNotMatch(html,/Cycle check needed|Confirm Lucid|save a new/);
+ const html=render(journal);assert.match(html,/1 payout/);assert.match(html,/Commission data incomplete/);assert.match(html,/Commission data is incomplete/);assert.doesNotMatch(html,/Waiting for latest P&amp;L|Cycle check needed|Confirm Lucid|save a new/);
 });
 
 test('pending session data keeps earlier confirmed profit days visible in text and the progress steps',()=>{
  const journal=data();journal.adjustments=[];journal.realizedSessions=[{account,contract:'MNQ 2026-12',symbol:'MNQ',day:'2026-10-21',gross:201,commissions:1,net:200,exits:1,quantity:1,unmatched:0},{account,contract:'MNQ 2026-12',symbol:'MNQ',day:'2026-10-22',gross:0,commissions:1,net:null,exits:1,quantity:1,unmatched:1,coverageIssues:1}];
- const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.equal((html.match(/class="filled"/g)||[]).length,1);assert.match(html,/Waiting for latest P&amp;L/);
+ const html=render(journal);assert.match(html,/1<small> confirmed \/ 5 days/);assert.equal((html.match(/class="filled"/g)||[]).length,1);assert.match(html,/Historical trading data incomplete/);assert.doesNotMatch(html,/Waiting for latest P&amp;L/);
 });
 test('trading inside an observed payout window explains timing uncertainty and retains confirmed later days',()=>{
  const journal=data();journal.adjustments![0].tradingActivity=true;journal.realizedCheckpoints=[{account,capturedAt:cut,session:'2026-10-22',net:500,afterNet:200}];
