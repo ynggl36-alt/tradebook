@@ -9,6 +9,23 @@ export type AccountStateCapture={schemaVersion:1;mode:'AccountsReadOnly';recorde
 export type AccountMonitor={capturedAt:string;running:boolean;recorderVersion:string;scopePrefixes:string[];accountsSeen:string[]};
 export type AccountStateData={monitor:AccountMonitor|null;accounts:AccountState[]};
 export const EMPTY_ACCOUNT_STATE:AccountStateData={monitor:null,accounts:[]};
+// Captures are full snapshots, not patches. A missing item is unavailable;
+// neither an old value nor an assumed zero belongs to the new capture. Also
+// normalize legacy rows whose values/positions were merged across captures.
+// Source observations remain untouched for historical accounting.
+export function currentAccountSnapshot(account:AccountState):AccountState{
+ const values:AccountState['values']={};
+ if(account.connected)for(const field of ACCOUNT_FIELDS){const value=account.values[field];if(value?.at===account.capturedAt)values[field]=value;}
+ const positionsAvailable=account.connected&&account.positionsAvailable&&account.positionsAt===account.capturedAt;
+ return {...account,values,positionsAvailable,positions:positionsAvailable?account.positions:[],positionsAt:positionsAvailable?account.capturedAt:null};
+}
+export function currentAccountSnapshots(data:AccountStateData):AccountStateData{return {...data,accounts:data.accounts.map(currentAccountSnapshot)};}
+// A late account upload can change a previously seen account without changing
+// the global heartbeat. Compare the complete normalized response, not just it.
+export function refreshAccountSnapshots(previous:AccountStateData,incoming:AccountStateData):AccountStateData{
+ const next=currentAccountSnapshots(incoming);
+ return JSON.stringify(previous)===JSON.stringify(next)?previous:next;
+}
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid account snapshot.');return value as Record<string,unknown>;}
 function text(value:unknown,max:number,blank=false){if(typeof value!=='string'||value.length>max||(!blank&&!value.trim())||/[\u0000-\u001f]/.test(value))throw new Error('Invalid account snapshot text.');return value.trim();}
 function stamp(value:unknown,label:string){const v=text(value,50);if(!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,7})?Z$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString().slice(0,19)!==v.slice(0,19))throw new Error('Invalid '+label+'.');return new Date(v).toISOString();}

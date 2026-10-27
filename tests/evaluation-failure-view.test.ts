@@ -17,6 +17,7 @@ const originalLoad=(Module as any)._load;
  return originalLoad.call(this,name,...rest);
 };
 const {CurrentAccountsView}=require('../app/current-accounts')as typeof import('../app/current-accounts');
+const {AccountProgress}=require('../app/account-progress')as typeof import('../app/account-progress');
 (Module as any)._load=originalLoad;
 const profiles=new Map<string,AccountProfile>([failed,healthy,funded].map(account=>[account,{account,label:account===failed?'Failed eval label':account===healthy?'Healthy eval label':'Funded label',stage:account===funded?'Funded':'Evaluation',status:'Active',notes:''}]));
 const journal:Journal={ready:true,trades:[],accounts:[],profiles:[...profiles.values()],notes:[],cash:[],imports:[],lastSaved:at,seedVersion:'synthetic',evaluationFailures:[{account:failed,at,balance:47999,floor:48000,source:'cash'}]};
@@ -36,4 +37,17 @@ test('annual Accounts payouts retain disconnected history, deduplicate deduction
  assert.doesNotMatch(html,/Open contracts|Last reported open contracts|accounts supplied positions/);
  assert.match(html,/Payouts · 2026<\/span><b>\$2,000\.00<\/b>/);
  assert.equal(JSON.stringify(source),before);
+});
+
+test('current cards and account review omit stale merged P&L and positions while keeping fresh balances',()=>{
+ const original=accountState.accounts,old='2026-10-21T20:00:00.000Z';
+ try{
+  accountState.accounts=[{...state(funded,52000),values:{CashValue:{value:52000,at,source:'PlatformRead'},RealizedProfitLoss:{value:933.25,at:old,source:'PlatformRead'}},positionsAvailable:true,positionsAt:old,positions:[{instrument:'MNQ 12-26',side:'Long',quantity:2,averagePrice:29000}]}];
+  for(const html of [renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}})),renderToStaticMarkup(createElement(AccountProgress,{account:funded,journal,onSaveFirm:async()=>true,busy:false}))]){
+   assert.match(html,/\$52,000\.00/);assert.doesNotMatch(html,/933\.25|MNQ 12-26|Long 2/);
+  }
+  let html=renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}}));assert.match(html,/Not supplied in this snapshot/);
+  accountState.accounts[0]={...accountState.accounts[0],values:{CashValue:{value:52000,at,source:'PlatformRead'},RealizedProfitLoss:{value:0,at,source:'PlatformRead'}}};
+  html=renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}}));assert.match(html,/Realized P&amp;L · reported<\/span><strong[^>]*>\$0\.00<\/strong>/);assert.doesNotMatch(html,/933\.25/);
+ }finally{accountState.accounts=original;}
 });
