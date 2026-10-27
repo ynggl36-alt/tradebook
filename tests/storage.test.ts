@@ -74,7 +74,7 @@ test('persistent storage: seed, real SQL imports, payout edits, annotations and 
 });
 
 
-test('account monitor persists real balances and last-known positions without changing trading history or inferring payouts',async()=>{
+test('account monitor persists full snapshots without merging earlier fields or changing trading history',async()=>{
  const before=await server.loadJournal();
  const t='2026-10-16T21:00:00.000Z';
  const snapshot=(capturedAt:string,accounts:any[],running=true)=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.3.0',capturedAt,running,scopePrefixes:['LFE','LFF'],accounts});
@@ -87,14 +87,14 @@ test('account monitor persists real balances and last-known positions without ch
  const t2='2026-10-16T21:00:15.000Z';const decreased={...a,values:{CashValue:{value:50000,at:t2,source:'PlatformRead'}},positions:[]};
  await server.saveAccountState(snapshot(t2,[decreased]));
  assert.equal((await server.saveAccountState(snapshot(t,[a]))).accepted,false);
- state=await server.loadAccountState();assert.equal(state.accounts[0].values.CashValue?.value,50000);assert.equal(state.accounts[0].values.UnrealizedProfitLoss?.at,t);assert.equal(state.accounts[0].positions.length,0);
+ state=await server.loadAccountState();assert.equal(state.accounts[0].values.CashValue?.value,50000);assert.equal(state.accounts[0].values.UnrealizedProfitLoss,undefined);assert.equal(state.accounts[0].positions.length,0);
  const t3='2026-10-16T21:00:30.000Z';await server.saveAccountState(snapshot(t3,[{...a,connected:false,currency:'Unknown',values:{},positionsAvailable:false,positions:[]}],false));
- state=await server.loadAccountState();assert.equal(state.monitor?.running,false);assert.equal(state.accounts[0].currency,'USD');assert.equal(state.accounts[0].values.CashValue?.value,50000);assert.equal(state.accounts[0].values.CashValue?.at,t2);assert.equal(state.accounts[0].positionsAt,t2);assert.equal(state.accounts[0].positionsAvailable,false);
+ state=await server.loadAccountState();assert.equal(state.monitor?.running,false);assert.equal(state.accounts[0].currency,'Unknown');assert.deepEqual(state.accounts[0].values,{});assert.equal(state.accounts[0].positionsAt,null);assert.equal(state.accounts[0].positionsAvailable,false);
  // An account absent from a newer batch is retained, without changing its manual status.
  await server.saveAccountState(snapshot('2026-10-16T21:00:45.000Z',[]));state=await server.loadAccountState();assert.equal(state.accounts.length,1);assert.deepEqual(state.monitor?.accountsSeen,[]);
  const after=await server.loadJournal();assert.deepEqual(after.accounts,before.accounts);assert.deepEqual(after.trades,before.trades);assert.deepEqual(after.cash,before.cash);assert.equal(after.profiles.find(p=>p.account===a.account)?.status,'Active');
  await server.saveCash({id:'new-current-payout',kind:'payout',date:'2026-10-16',account:a.account,deduction:1000,received:900,note:'Explicit payout confirmation'});
- const backup=JSON.parse(await(await server.backupResponse()).text());assert.equal(backup.accountState.accounts[0].values.CashValue.value,50000);assert.equal(backup.accountState.monitor.capturedAt,'2026-10-16T21:00:45.000Z');assert.equal((await server.loadJournal()).cash.length,before.cash.length+1);
+ const backup=JSON.parse(await(await server.backupResponse()).text());assert.deepEqual(backup.accountState.accounts[0].values,{});assert.ok(backup.balanceObservations.some((row:any)=>row.state.account===a.account&&row.capturedAt===t2&&row.state.values.CashValue.value===50000));assert.equal(backup.accountState.monitor.capturedAt,'2026-10-16T21:00:45.000Z');assert.equal((await server.loadJournal()).cash.length,before.cash.length+1);
  // More than 30 accounts exercises bounded SQL batches with the actual SQLite engine.
  const many=Array.from({length:61},(_,i)=>({...a,account:'LFE-BATCH-'+i,values:{},positions:[]}));
  await server.saveAccountState(snapshot('2026-10-16T21:01:00.000Z',many));state=await server.loadAccountState();assert.equal(state.accounts.length,62);assert.equal(state.monitor?.accountsSeen.length,61);
@@ -451,4 +451,102 @@ test('evaluation breach evidence refreshes on floating loss and survives disappe
  result=await server.loadJournal();assert.deepEqual(result.evaluationFailures!.find(p=>p.account===account),failure);
  assert.deepEqual(result.profiles.find(p=>p.account===account),profileBefore);assert.deepEqual(result.trades,before.trades);assert.deepEqual(result.cash,before.cash);assert.deepEqual(result.notes,before.notes);
  const backup=JSON.parse(await(await server.backupResponse()).text());assert.ok(backup.balanceObservations.some((o:any)=>o.account===account&&o.state.values.UnrealizedProfitLoss?.value===-2001));
+});
+
+test('session and provider changes refresh journal verification while identical heartbeats stay lightweight',async()=>{
+ const account='LFF05000000000994';
+ const snapshot=(capturedAt:string,provider='Synthetic')=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Synthetic',provider,values:{CashValue:{value:50000,at:capturedAt,source:'PlatformRead'},RealizedProfitLoss:{value:0,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]});
+ await server.saveAccountState(snapshot('2026-10-26T21:58:00.000Z'));const before=await server.loadJournalVersion();
+ await server.saveAccountState(snapshot('2026-10-26T21:59:00.000Z'));assert.equal((await server.loadJournalVersion()).revision,before.revision);
+ await server.saveAccountState(snapshot('2026-10-26T22:00:00.000Z'));const session=await server.loadJournalVersion();assert.notEqual(session.revision,before.revision);
+ await server.saveAccountState(snapshot('2026-10-26T22:01:00.000Z','Other'));assert.notEqual((await server.loadJournalVersion()).revision,session.revision);
+});
+
+test('legacy merged source remains in backup and the first immutable baseline even when current fields are unavailable',async()=>{
+ const account='LFF05000000000995',capturedAt='2026-10-26T21:00:00.000Z',old='2026-10-23T21:00:00.000Z';
+ const legacy={account,capturedAt,currency:'USD',connected:false,connection:'Legacy',provider:'Synthetic',values:{CashValue:{value:51234,at:old,source:'PlatformRead'},RealizedProfitLoss:{value:1234,at:old,source:'PlatformRead'}},positions:[{instrument:'MNQ 12-26',side:'Long',quantity:1,averagePrice:100}],positionsAvailable:false,positionsAt:old};
+ sqlite.prepare('INSERT INTO account_status(account,captured_at,data) VALUES (?,?,?)').run(account,capturedAt,JSON.stringify(legacy));
+ assert.deepEqual((await server.loadAccountState()).accounts.find(row=>row.account===account)!.values,{});
+ const backup=JSON.parse(await(await server.backupResponse()).text());assert.deepEqual(backup.accountState.accounts.find((row:any)=>row.account===account),legacy);
+ assert.equal(accountObservations(account).length,0);
+ const next='2026-10-27T12:59:00.000Z';
+ await server.saveAccountState({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt:next,running:true,scopePrefixes:['LFF'],accounts:[{...legacy,capturedAt:undefined,connected:true,values:{CashValue:{value:51234,at:next,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]});
+ const archived=accountObservations(account).find(row=>row.origin==='legacy')!;assert.ok(archived);assert.deepEqual(JSON.parse(String(archived.data)).state,legacy);
+ const current=(await server.loadAccountState()).accounts.find(row=>row.account===account)!;assert.equal(current.values.CashValue?.value,51234);assert.equal(current.values.RealizedProfitLoss,undefined);
+ assert.deepEqual(JSON.parse(String(accountObservations(account).find(row=>row.origin==='legacy')!.data)).state,legacy);
+});
+
+test('next-session omissions, explicit zeros and reconnects replace current state while verified historical net stays intact',async()=>{
+ const account='LFF05000000000993',at='2026-10-26T20:00:00.000Z';
+ const snapshot=(capturedAt:string,net:number|null,cash=50099)=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFE','LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Snapshot test',provider:'Synthetic',values:{CashValue:{value:cash,at:capturedAt,source:'PlatformRead'},...(net!==null?{RealizedProfitLoss:{value:net,at:capturedAt,source:'PlatformRead'}}:{}),UnrealizedProfitLoss:{value:0,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]});
+ await server.saveAccountState(snapshot('2026-10-25T20:00:00.000Z',0,50000));
+ await server.importExecutions({source:'snapshot-regression',checksum:'d'.repeat(64),chunk:0,fills:[{account,id:'snapshot-entry',contract:'MNQ 2026-12',side:'Buy',qty:1,price:100,time:'2026-10-26T14:00:00Z',pos:1},{account,id:'snapshot-exit',contract:'MNQ 2026-12',side:'Sell',qty:1,price:150,time:'2026-10-26T14:01:00Z',pos:0}]});
+ await server.saveAccountState(snapshot(at,99));
+ const before=await server.loadJournal(),history=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),source=accountObservations(account).find(row=>row.captured_at===at)!;
+ assert.ok(source);
+ assert.equal(before.reportedSessions!.find(row=>row.account===account&&row.day==='2026-10-26')?.net,99);
+ const state=()=>server.loadAccountState().then(data=>data.accounts.find(row=>row.account===account)!);
+ const next='2026-10-27T13:00:00.000Z';await server.saveAccountState(snapshot(next,null));
+ assert.equal((await state()).values.CashValue?.value,50099);assert.equal((await state()).values.RealizedProfitLoss,undefined);
+ assert.equal((await server.saveAccountState(snapshot(next,null))).accepted,false);
+ // Late observations are archived but never roll back the current account.
+ assert.equal((await server.saveAccountState(snapshot('2026-10-26T20:01:00.000Z',99))).accepted,false);
+ assert.equal((await state()).capturedAt,next);assert.equal((await state()).values.RealizedProfitLoss,undefined);
+ let revision=await server.loadJournalVersion();await server.saveAccountState(snapshot('2026-10-27T13:01:00.000Z',0));
+ assert.equal((await state()).values.RealizedProfitLoss?.value,0);assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
+ revision=await server.loadJournalVersion();await server.saveAccountState(snapshot('2026-10-27T13:02:00.000Z',null));
+ assert.equal((await state()).values.RealizedProfitLoss,undefined);assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
+ const disconnected:any=snapshot('2026-10-27T13:03:00.000Z',null);Object.assign(disconnected.accounts[0],{connected:false,currency:'Unknown',values:{},positionsAvailable:false});
+ await server.saveAccountState(disconnected);assert.deepEqual((await state()).values,{});assert.equal((await state()).currency,'Unknown');
+ await server.saveAccountState(snapshot('2026-10-27T13:04:00.000Z',null));assert.equal((await state()).values.RealizedProfitLoss,undefined);assert.equal((await state()).positionsAvailable,true);
+ const after=await server.loadJournal();assert.equal(after.reportedSessions!.find(row=>row.account===account&&row.day==='2026-10-26')?.net,99);
+ assert.deepEqual(after.cash,before.cash);assert.deepEqual(after.profiles,before.profiles);assert.deepEqual(after.trades,before.trades);
+ assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),history);assert.deepEqual(accountObservations(account).find(row=>row.captured_at===at),source);
+ const raw=JSON.parse(String(sqlite.prepare('SELECT data FROM account_status WHERE account=?').get(account)!.data));assert.equal(raw.values.RealizedProfitLoss,undefined);
+ // Pre-fix merged status rows are safe immediately on read, with no rewrite
+ // of immutable observations or dependence on another recorder upload.
+ raw.values.RealizedProfitLoss={value:99,at,source:'PlatformRead'};raw.positionsAvailable=true;raw.positionsAt=at;raw.positions=[{instrument:'MNQ 12-26',side:'Long',quantity:1,averagePrice:100}];
+ sqlite.prepare('UPDATE account_status SET data=? WHERE account=?').run(JSON.stringify(raw),account);
+ assert.equal((await state()).values.RealizedProfitLoss,undefined);assert.equal((await state()).positionsAvailable,false);assert.deepEqual((await state()).positions,[]);
+ assert.equal(JSON.parse(String(sqlite.prepare('SELECT data FROM account_status WHERE account=?').get(account)!.data)).values.RealizedProfitLoss.value,99);
+});
+
+test('overlapping uploads compare revision and settlement evidence against the committed current snapshot',async()=>{
+ const account='LFF05000000000996',snapshot=(capturedAt:string,net:number)=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Concurrent test',provider:'Synthetic',values:{CashValue:{value:50159,at:capturedAt,source:'PlatformRead'},RealizedProfitLoss:{value:net,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]});
+ await server.saveAccountState(snapshot('2026-10-27T13:10:00.000Z',159));
+ const originalBatch=database.batch;
+ let releaseA!:()=>void,releaseB!:()=>void,enteredA!:()=>void,enteredB!:()=>void;
+ const gateA=new Promise<void>(resolve=>releaseA=resolve),gateB=new Promise<void>(resolve=>releaseB=resolve),readyA=new Promise<void>(resolve=>enteredA=resolve),readyB=new Promise<void>(resolve=>enteredB=resolve);
+ let calls=0;
+ database.batch=async statements=>{const call=++calls;if(call===1){enteredA();await gateA;}if(call===2){enteredB();await gateB;}return originalBatch(statements);};
+ try{
+  const a=server.saveAccountState(snapshot('2026-10-27T13:11:00.000Z',200));await readyA;
+  const b=server.saveAccountState(snapshot('2026-10-27T13:12:00.000Z',159));await readyB;
+  releaseA();await a;const intermediate=await server.loadJournalVersion();
+  // Both requests read 159 before either batch committed. B must still notice
+  // A's committed 200, even if the settlement clock is deliberately old.
+  sqlite.prepare("UPDATE journal_meta SET value='2026-10-20T00:00:00.000Z' WHERE key='last_balance_change'").run();
+  releaseB();await b;assert.notEqual((await server.loadJournalVersion()).revision,intermediate.revision);
+  const current=(await server.loadAccountState()).accounts.find(row=>row.account===account)!;assert.equal(current.values.RealizedProfitLoss?.value,159);
+  assert.notEqual(sqlite.prepare("SELECT value FROM journal_meta WHERE key='last_balance_change'").get()!.value,'2026-10-20T00:00:00.000Z');
+ }finally{releaseA();releaseB();database.batch=originalBatch;}
+});
+
+test('unchanged native amounts refresh newly verified zero-net trading, including histories without a legacy time index',async()=>{
+ for(const [i,indexed]of [true,false].entries()){
+  const account='LFF0500000000099'+(7+i),base=Date.parse(i===0?'2026-10-27T13:20:00.000Z':'2026-10-27T13:30:00.000Z'),time=(minute:number)=>new Date(base+minute*60000).toISOString();
+  const snapshot=(capturedAt:string,net:number,cash:number)=>({schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.0',capturedAt,running:true,scopePrefixes:['LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Verification test',provider:'Synthetic',values:{CashValue:{value:cash,at:capturedAt,source:'PlatformRead'},RealizedProfitLoss:{value:net,at:capturedAt,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]});
+  await server.saveAccountState(snapshot(time(-3),0,50000));
+  const fill=(id:string,minute:number,side:string,price:number,pos:number)=>({account,id,contract:'MNQ 2026-12',side,qty:1,price,time:time(minute),pos});
+  await server.importExecutions({source:'snapshot-verification-initial-'+i,checksum:String(5+i).repeat(64),chunk:0,fills:[fill('clean-entry',-2,'Buy',100,1),fill('clean-exit',-1,'Sell',180,0)]});
+  await server.saveAccountState(snapshot(time(0),159,50159));
+  assert.equal((await server.loadJournal()).reportedSessions!.find(row=>row.account===account)?.net,159);
+  await server.importExecutions({source:'snapshot-verification-disputed-'+i,checksum:String(7+i).repeat(64),chunk:0,fills:[fill('disputed-entry',1,'Buy',200,2),fill('disputed-exit',2,'Sell',200.5,1)]});
+  assert.equal((await server.loadJournal()).reportedSessions!.some(row=>row.account===account),false);
+  if(!indexed)sqlite.prepare('DELETE FROM execution_times WHERE account=?').run(account);
+  const before=await server.loadJournalVersion();await server.saveAccountState(snapshot(time(3),159,50159));
+  assert.notEqual((await server.loadJournalVersion()).revision,before.revision);
+  assert.equal((await server.loadJournal()).reportedSessions!.find(row=>row.account===account)?.net,159);
+  const settled=await server.loadJournalVersion();await server.saveAccountState(snapshot(time(4),159,50159));assert.equal((await server.loadJournalVersion()).revision,settled.revision);
+ }
 });

@@ -8,7 +8,7 @@ import {isRecorderFile} from '../lib/recorder';
 import {dateLabel,num,timeLabel} from './ui';
 import {centralDay} from '../lib/analytics';
 import {synchronizeExecutions} from '../lib/recorder-sync';
-import {ACCOUNT_STATE_FILE,ACCOUNT_STATE_LIMIT,EMPTY_ACCOUNT_STATE,monitorFresh} from '../lib/account-state';
+import {ACCOUNT_STATE_FILE,ACCOUNT_STATE_LIMIT,EMPTY_ACCOUNT_STATE,monitorFresh,refreshAccountSnapshots} from '../lib/account-state';
 import type {AccountStateCapture,AccountStateData} from '../lib/account-state';
 import {parseAccountStateXml} from '../lib/account-state-browser';
 import {accountSyncStatus} from '../lib/recorder-status';
@@ -56,7 +56,7 @@ export function RecorderProvider({children}:{children:React.ReactNode}){
   const refreshAccountState=useCallback(async()=>{
     const request=++accountRequest.current,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
     try{const response=await fetch('/api/account-state',{cache:'no-store',signal:controller.signal}),data=await response.json() as AccountStateData&{error?:string};if(!response.ok)throw new Error(data.error||'Account information could not load.');
-      if(alive.current&&request===accountRequest.current){setAccountState(previous=>previous.monitor&&data.monitor&&previous.monitor.capturedAt===data.monitor.capturedAt?previous:data);setAccountLoadError('');setAccountStateLoading(false);}return true;
+      if(alive.current&&request===accountRequest.current){setAccountState(previous=>refreshAccountSnapshots(previous,data));setAccountLoadError('');setAccountStateLoading(false);}return true;
     }catch(e){if(alive.current&&request===accountRequest.current){setAccountLoadError(message(e));setAccountStateLoading(false);}return false;}finally{clearTimeout(timeout);}
   },[]);
   const syncAllowed=useRef<boolean|null>(null),syncWorking=useRef(false),retryAfter=useRef(0);

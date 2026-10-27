@@ -2,13 +2,14 @@ import { env } from 'cloudflare:workers';
 import type { AccountHistory, AccountProfile, CashRecord, Fill, Journal, TradeNote } from './types';
 import { mergeFills, reconstruct } from './reconstruct';
 import { normalizeContract } from './csv';
-import {validateAccountState} from './account-state';
+import {currentAccountSnapshot,currentAccountSnapshots,validateAccountState} from './account-state';
 import {validateFirmReference} from './firm-reference';
 import type {FirmReference} from './firm-reference';
 import {planFirmPayoutImport,payoutSummary,validateFirmPayout} from './payouts';
 import type {AccountMonitor,AccountState,AccountStateData} from './account-state';
 import {aggregateRealized,realizedEvents,realizedCheckpoint} from './realized';
 import {latestPayoutDeduction} from './lucid-flex';
+import {flexSession,flexSessionStart} from './trading-session';
 import {reportedAccountSessions,reportedCheckpoint} from './account-sessions';
 import {evaluationFailures,observedEvaluationEquity} from './evaluation-failures';
 import type {EvaluationObservation} from './evaluation-failures';
@@ -45,62 +46,79 @@ async function indexExecutionTimes(fills:{account:string;time:string}[]){
  const unique=[...new Map(normalized.map(fill=>[fill.account+'|'+fill.time,fill])).values()];
  for(let offset=0;offset<unique.length;offset+=40){const chunk=unique.slice(offset,offset+40);await db().prepare(`INSERT INTO execution_times(account,time) VALUES ${chunk.map(()=>'(?,?)').join(',')} ON CONFLICT(account,time) DO NOTHING`).bind(...chunk.flatMap(fill=>[fill.account,fill.time])).run();}
 }
-export async function loadAccountState():Promise<AccountStateData>{
+// Stored rows are source evidence for backups and the one-time legacy archive.
+// Current callers receive a normalized projection, never this raw source.
+async function storedAccountState():Promise<AccountStateData>{
   const [monitor,rows]=await Promise.all([
     db().prepare("SELECT data FROM recorder_status WHERE id='latest'").first<{data:string}>(),
     db().prepare('SELECT data FROM account_status ORDER BY account').all<{data:string}>(),
   ]);
   return {monitor:monitor?JSON.parse(monitor.data)as AccountMonitor:null,accounts:rows.results.map(r=>JSON.parse(r.data)as AccountState)};
 }
+export async function loadAccountState():Promise<AccountStateData>{return currentAccountSnapshots(await storedAccountState());}
+// Compare source availability as well as amounts inside the write transaction.
+// Timestamps themselves are excluded so identical heartbeats stay lightweight.
+function currentValueSql(data:string,item:string){return `CASE WHEN json_extract(${data},'$.connected') AND json_extract(${data},'$.values.${item}.at')=json_extract(${data},'$.capturedAt') THEN json_extract(${data},'$.values.${item}.value') END`;}
+function currentPositionsSql(data:string){return `json_extract(${data},'$.connected') AND json_extract(${data},'$.positionsAvailable') AND json_extract(${data},'$.positionsAt')=json_extract(${data},'$.capturedAt')`;}
+function accountEvidenceSql(data:string){return `json_array(json_extract(${data},'$.connected'),json_extract(${data},'$.currency'),json_extract(${data},'$.connection'),json_extract(${data},'$.provider'),${currentValueSql(data,'CashValue')},${currentValueSql(data,'RealizedProfitLoss')},CASE WHEN ${currentPositionsSql(data)} THEN json_extract(${data},'$.positions') END)`;}
 export async function saveAccountState(input:unknown){
   const capture=validateAccountState(input);
-  const prior=await loadAccountState(),priorAccounts=new Map(prior.accounts.map(account=>[account.account,account]));
+  const storedPrior=await storedAccountState(),prior=currentAccountSnapshots(storedPrior),priorAccounts=new Map(prior.accounts.map(account=>[account.account,account])),priorSources=new Map(storedPrior.accounts.map(account=>[account.account,account]));
   const existing=await db().prepare('SELECT account,MIN(CASE WHEN cash_value IS NOT NULL THEN captured_at END) AS first FROM account_observations GROUP BY account').all<{account:string;first:string|null}>(),archived=new Set(existing.results.map(row=>row.account)),earliest=new Map(existing.results.filter(row=>row.first!==null).map(row=>[row.account,row.first!]));
   const receivedAt=new Date().toISOString(),raw=capture.accounts.map(account=>observation(account,capture.recorderVersion,capture.running));
-  const baselines=capture.accounts.flatMap(account=>{const old=priorAccounts.get(account.account);return old&&!archived.has(account.account)?[observation(old,'legacy-last-known',false,'legacy')]:[];});
+  const baselines=capture.accounts.flatMap(account=>{const old=priorSources.get(account.account);return old&&!archived.has(account.account)?[observation(old,'legacy-last-known',false,'legacy')]:[];});
   // Only the newly observed portion needs a time index. Existing raw execution
   // history remains untouched; later imports index their own timestamps.
   const firstAccounts=capture.accounts.filter(account=>!earliest.has(account.account)||Date.parse(account.values.CashValue?.at??capture.capturedAt)<Date.parse(earliest.get(account.account)!));
   for(let offset=0;offset<firstAccounts.length;offset+=30){const chunk=firstAccounts.slice(offset,offset+30),histories=await db().prepare(`SELECT account,data FROM account_history WHERE account IN (${chunk.map(()=>'?').join(',')})`).bind(...chunk.map(account=>account.account)).all<{account:string;data:string}>();
-   await indexExecutionTimes(histories.results.flatMap(row=>{const incoming=chunk.find(account=>account.account===row.account)!,first=Math.min(...[priorAccounts.get(row.account)?.values.CashValue?.at,incoming.values.CashValue?.at??capture.capturedAt].filter((value):value is string=>!!value).map(value=>Date.parse(value))),end=earliest.get(row.account),history=JSON.parse(row.data)as AccountHistory;return history.fills.filter(fill=>Date.parse(fill.time)>=first&&(!end||Date.parse(fill.time)<=Date.parse(end))).map(fill=>({account:row.account,time:fill.time}));}));
+   await indexExecutionTimes(histories.results.flatMap(row=>{const incoming=chunk.find(account=>account.account===row.account)!,first=Math.min(...[priorSources.get(row.account)?.values.CashValue?.at,incoming.values.CashValue?.at??capture.capturedAt].filter((value):value is string=>!!value).map(value=>Date.parse(value))),end=earliest.get(row.account),history=JSON.parse(row.data)as AccountHistory;return history.fills.filter(fill=>Date.parse(fill.time)>=first&&(!end||Date.parse(fill.time)<=Date.parse(end))).map(fill=>({account:row.account,time:fill.time}));}));
   }
   const seen=new Set(capture.accounts.map(account=>account.account));
   if(prior.monitor&&capture.capturedAt>prior.monitor.capturedAt){for(const name of prior.monitor.accountsSeen){if(seen.has(name))continue;const old=priorAccounts.get(name);if(old)raw.push(observation({...old,capturedAt:capture.capturedAt,connected:false,values:{},positions:[],positionsAvailable:false,positionsAt:null},capture.recorderVersion,capture.running,'not-seen'));}}
   const header=canonicalJson({schemaVersion:capture.schemaVersion,mode:capture.mode,recorderVersion:capture.recorderVersion,capturedAt:capture.capturedAt,running:capture.running,scopePrefixes:capture.scopePrefixes,accountsSeen:[...seen].sort()});
   const monitor:AccountMonitor={capturedAt:capture.capturedAt,running:capture.running,recorderVersion:capture.recorderVersion,scopePrefixes:capture.scopePrefixes,accountsSeen:capture.accounts.map(a=>a.account)};
-  const statements=[db().prepare("INSERT INTO recorder_status(id,captured_at,data) VALUES ('latest',?,?) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,data=excluded.data WHERE excluded.captured_at>recorder_status.captured_at").bind(capture.capturedAt,JSON.stringify(monitor))];
   // A conflicting replay aborts the atomic batch through the NOT NULL guard;
   // identical replays never overwrite immutable source observations.
-  statements.push(db().prepare('INSERT INTO recorder_captures(captured_at,data,received_at) VALUES (?,?,?) ON CONFLICT(captured_at) DO UPDATE SET data=NULL WHERE recorder_captures.data<>excluded.data').bind(capture.capturedAt,header,receivedAt));
+  const statements=[db().prepare('INSERT INTO recorder_captures(captured_at,data,received_at) VALUES (?,?,?) ON CONFLICT(captured_at) DO UPDATE SET data=NULL WHERE recorder_captures.data<>excluded.data').bind(capture.capturedAt,header,receivedAt)];
+  const current=capture.accounts.map(currentAccountSnapshot);
+  const equity=(state:AccountState)=>observedEvaluationEquity({account:state.account,capturedAt:state.capturedAt,connected:Number(state.connected),currency:state.currency,connection:state.connection,provider:state.provider,cash:state.values.CashValue?.value??null,cashAt:state.values.CashValue?.at??null,net:null,netAt:null,equity:state.values.NetLiquidation?.value,equityAt:state.values.NetLiquidation?.at,floating:state.values.UnrealizedProfitLoss?.value,floatingAt:state.values.UnrealizedProfitLoss?.at,positionsAvailable:Number(state.positionsAvailable),positionsAt:state.positionsAt,positionData:JSON.stringify(state.positions)})?.value;
+  const evidence=current.map(account=>({...account,risk:/^LFE050\d+$/i.test(account.account)?equity(account)??null:null}));
+  // changes() belongs to the immediately preceding header INSERT. Both the
+  // evidence comparison and revision/settlement update precede status changes
+  // in the same atomic batch, so overlapping uploaders cannot compare against
+  // a stale application-side read. A late archive can also change history.
+  statements.push(db().prepare(`INSERT INTO journal_meta(key,value)
+   SELECT 'change_revision','1' WHERE changes()>0 AND (
+    EXISTS(SELECT 1 FROM recorder_status WHERE id='latest' AND captured_at>?) OR
+    EXISTS(SELECT 1 FROM recorder_status WHERE id='latest' AND captured_at<? AND (json_extract(data,'$.running') IS NOT ? OR EXISTS(SELECT 1 FROM json_each(data,'$.accountsSeen') old WHERE old.value NOT IN (SELECT value FROM json_each(?))) OR EXISTS(SELECT 1 FROM json_each(?) incoming WHERE incoming.value NOT IN (SELECT value FROM json_each(data,'$.accountsSeen'))))) OR
+    EXISTS(SELECT 1 FROM json_each(?) incoming LEFT JOIN account_status previous ON previous.account=json_extract(incoming.value,'$.account')
+     WHERE (previous.account IS NULL OR previous.captured_at<json_extract(incoming.value,'$.capturedAt')) AND (
+      previous.account IS NULL OR ${accountEvidenceSql('previous.data')}<>${accountEvidenceSql('incoming.value')} OR previous.captured_at<? OR
+      (json_extract(incoming.value,'$.risk') IS NOT NULL AND json_extract(incoming.value,'$.risk')<=50100 AND (${currentValueSql('previous.data','NetLiquidation')} IS NOT ${currentValueSql('incoming.value','NetLiquidation')} OR ${currentValueSql('previous.data','UnrealizedProfitLoss')} IS NOT ${currentValueSql('incoming.value','UnrealizedProfitLoss')})) OR
+      EXISTS(SELECT 1 FROM execution_times e WHERE e.account=previous.account AND e.time>previous.captured_at AND e.time<=json_extract(incoming.value,'$.capturedAt')) OR
+      EXISTS(SELECT 1 FROM account_history h WHERE h.account=previous.account AND json_extract(h.summary_data,'$.last')>previous.captured_at)
+     ))
+   ) ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)`).bind(capture.capturedAt,capture.capturedAt,Number(capture.running),JSON.stringify([...seen]),JSON.stringify([...seen]),JSON.stringify(evidence),flexSessionStart(flexSession(capture.capturedAt))));
+  statements.push(db().prepare("INSERT INTO journal_meta(key,value) SELECT 'last_balance_change',? WHERE changes()>0 ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").bind(receivedAt));
+  const monitorIndex=statements.length;
+  statements.push(db().prepare("INSERT INTO recorder_status(id,captured_at,data) VALUES ('latest',?,?) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,data=excluded.data WHERE excluded.captured_at>recorder_status.captured_at").bind(capture.capturedAt,JSON.stringify(monitor)));
   const observations=[...baselines,...raw];
   for(let offset=0;offset<observations.length;offset+=12){const chunk=observations.slice(offset,offset+12);statements.push(db().prepare(`INSERT INTO account_observations(id,account,captured_at,origin,cash_value,data,received_at) VALUES ${chunk.map(()=>'(?,?,?,?,?,?,?)').join(',')} ON CONFLICT(id) DO UPDATE SET data=NULL WHERE account_observations.data<>excluded.data`).bind(...chunk.flatMap(row=>[row.id,row.account,row.capturedAt,row.origin,row.state.values.CashValue?.value??null,canonicalJson(row),receivedAt])));}
-  // Retain the last reported values and positions through disconnects. Their own
-  // timestamps remain unchanged; current availability is checked against the heartbeat.
+  // Each upload replaces the current snapshot in full. Omitted provider items
+  // remain unavailable, including after reconnects and counter resets. Earlier
+  // values/positions survive in immutable observations, never inside a new row.
   // Batch 30 rows to stay under D1's bound-parameter and per-request query limits.
   for(let offset=0;offset<capture.accounts.length;offset+=30){
     const rows=capture.accounts.slice(offset,offset+30);
     const sql=`INSERT INTO account_status(account,captured_at,data) VALUES ${rows.map(()=>'(?,?,?)').join(',')}
       ON CONFLICT(account) DO UPDATE SET captured_at=excluded.captured_at,
-      data=json_set(excluded.data,
-        '$.currency',CASE WHEN json_extract(excluded.data,'$.currency')='Unknown' THEN json_extract(account_status.data,'$.currency') ELSE json_extract(excluded.data,'$.currency') END,
-        '$.values',CASE WHEN json_extract(excluded.data,'$.currency')=json_extract(account_status.data,'$.currency') OR json_extract(excluded.data,'$.currency')='Unknown' THEN json_patch(json_extract(account_status.data,'$.values'),json_extract(excluded.data,'$.values')) ELSE json_extract(excluded.data,'$.values') END,
-        '$.positions',CASE WHEN json_extract(excluded.data,'$.positionsAvailable') THEN json_extract(excluded.data,'$.positions') ELSE json_extract(account_status.data,'$.positions') END,
-        '$.positionsAt',CASE WHEN json_extract(excluded.data,'$.positionsAvailable') THEN json_extract(excluded.data,'$.positionsAt') ELSE json_extract(account_status.data,'$.positionsAt') END)
+      data=excluded.data
       WHERE excluded.captured_at>account_status.captured_at`;
-    statements.push(db().prepare(sql).bind(...rows.flatMap(a=>[a.account,capture.capturedAt,JSON.stringify(a)])));
+    statements.push(db().prepare(sql).bind(...rows.flatMap(a=>[a.account,capture.capturedAt,JSON.stringify(currentAccountSnapshot(a))])));
   }
   let results;try{results=await db().batch(statements);}catch(e){if(String(e).includes('NOT NULL'))throw new Error('Conflicting account snapshot at the same time. Saved observations were not replaced.');throw e;}
-  const pnlChanged=capture.accounts.some(account=>{const old=priorAccounts.get(account.account);return account.values.RealizedProfitLoss&&account.values.RealizedProfitLoss.value!==old?.values.RealizedProfitLoss?.value;});
-  const equity=(state:AccountState|undefined)=>state?observedEvaluationEquity({account:state.account,capturedAt:state.capturedAt,connected:Number(state.connected),currency:state.currency,connection:state.connection,provider:state.provider,cash:state.values.CashValue?.value??null,cashAt:state.values.CashValue?.at??null,net:null,netAt:null,equity:state.values.NetLiquidation?.value,equityAt:state.values.NetLiquidation?.at,floating:state.values.UnrealizedProfitLoss?.value,floatingAt:state.values.UnrealizedProfitLoss?.at,positionsAvailable:Number(state.positionsAvailable),positionsAt:state.positionsAt,positionData:JSON.stringify(state.positions)})?.value:null;
-  // Cash may stay unchanged during an equity breach. Refresh the journal when
-  // an evaluation's observed equity changes within the possible loss-floor band.
-  const riskChanged=capture.accounts.some(account=>{if(!/^LFE050\d+$/i.test(account.account))return false;const value=equity(account);return value!==null&&value!==undefined&&value<=50100&&value!==equity(priorAccounts.get(account.account));});
-  const balanceChanged=capture.accounts.some(account=>{const old=priorAccounts.get(account.account);return account.values.CashValue&&account.values.CashValue.value!==old?.values.CashValue?.value;}),availabilityChanged=capture.accounts.some(account=>priorAccounts.get(account.account)?.connected!==account.connected)||raw.some(row=>row.origin==='not-seen');
-  const late=!!prior.monitor&&capture.capturedAt<prior.monitor.capturedAt&&results[1].meta.changes>0;
-  const newlyArchived=results[1].meta.changes>0;
-  if(newlyArchived&&(balanceChanged||pnlChanged||riskChanged||availabilityChanged||late)){await bumpJournalRevision();if(balanceChanged||pnlChanged||late)await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('last_balance_change',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").bind(receivedAt).run();}
   const latest=await db().prepare("SELECT captured_at AS capturedAt FROM recorder_status WHERE id='latest'").first<{capturedAt:string}>();
-  return {accepted:results[0].meta.changes===1,capturedAt:latest?.capturedAt||capture.capturedAt};
+  return {accepted:results[monitorIndex].meta.changes===1,capturedAt:latest?.capturedAt||capture.capturedAt};
 }
 async function loadBalanceData(cash:CashRecord[],profiles:AccountProfile[],firmReferences:FirmReference[],asOf:number){
  const [pairs,labels,tracking,nativeRows]=await Promise.all([
@@ -288,7 +306,7 @@ export async function backupResponse(){
     db().prepare('SELECT data FROM account_history ORDER BY account').all<{data:string}>(),
     db().prepare('SELECT data FROM account_profiles').all<{data:string}>(),db().prepare('SELECT data FROM trade_notes').all<{data:string}>(),db().prepare('SELECT data FROM cash_records').all<{data:string}>(),
     db().prepare('SELECT id,source,added,duplicates,imported_at AS importedAt FROM journal_imports ORDER BY imported_at').all(),
-    db().prepare("SELECT value FROM journal_meta WHERE key='seed_version'").first<{value:string}>(),loadAccountState(),loadFirmReferences(),
+    db().prepare("SELECT value FROM journal_meta WHERE key='seed_version'").first<{value:string}>(),storedAccountState(),loadFirmReferences(),
   ]);
   const metadata={accountState,firmReferences,firmAdjustments:KNOWN_FIRM_ADJUSTMENTS,format:'tradebook-backup-v1',exportedAt:new Date().toISOString(),timezone:'America/Chicago',profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash:cs.results.map(r=>JSON.parse(r.data)),imports:im.results,seedVersion:version?.value||''};
   const encoder=new TextEncoder();

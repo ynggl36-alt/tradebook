@@ -6,12 +6,13 @@ import type {FirmReference} from '../lib/firm-reference';
 import {centralDay,summarize} from '../lib/analytics';
 import {LUCID_RATES_AS_OF,LUCID_RATES_URL,netTradeSummary} from '../lib/trading-costs';
 import {useRecorder} from './recorder-connection';
+import {currentAccountSnapshot} from '../lib/account-state';
 import {FlexProgress} from './flex-progress';
 import {flexAccount} from '../lib/lucid-flex';
 import {cashLedgerRows,cashLedgerSummary} from '../lib/cash-ledger';
 import {dateLabel,money,num,PanelTitle,signClass,Stat,timeLabel} from './ui';
 export function AccountProgress({account,journal,onSaveFirm,busy}:{account:string;journal:Journal;onSaveFirm:(r:FirmReference)=>Promise<boolean>;busy:boolean}){
- const recorder=useRecorder(),platform=recorder.accountState.accounts.find(a=>a.account===account),ref=journal.firmReferences?.find(r=>r.account===account);
+ const recorder=useRecorder(),saved=recorder.accountState.accounts.find(a=>a.account===account),platform=saved?currentAccountSnapshot(saved):undefined,ref=journal.firmReferences?.find(r=>r.account===account);
  const trades=journal.trades.filter(t=>t.account===account),gross=summarize(trades).gross,costs=netTradeSummary(trades);
  const nativeBalance=platform?.values.CashValue,nativeRealized=platform?.values.RealizedProfitLoss;
  const income=cashLedgerSummary(cashLedgerRows(journal.cash.filter(r=>r.account===account),(journal.adjustments||[]).filter(r=>r.account===account)));
