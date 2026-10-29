@@ -1,9 +1,10 @@
 import type {Fill} from './types';
 import {addDays,centralDay,centralHour,round} from './analytics';
 import {LUCID_PER_SIDE,LUCID_RATES_AS_OF} from './trading-costs';
+import {executionLedger} from './execution-ledger';
 
 export type RealizedDay={account:string;contract:string;symbol:string;day:string;gross:number;commissions:number|null;net:number|null;exits:number;quantity:number;unmatched:number;coverageIssues?:number};
-export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number};
+export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number;positionConflict?:true};
 export type RealizedCheckpoint={account:string;capturedAt:string;session:string;net:number|null;afterNet:number|null;coverageIssues?:number;afterCoverageIssues?:number};
 
 // Both Chicago midnight and the 17:00 session boundary occur on UTC hours,
@@ -19,47 +20,12 @@ function complete(event:Pick<RealizedEvent,'net'|'unmatched'|'coverageIssues'>){
 // FIFO lots realize their result on each exit fill, even while other lots stay
 // open. An entry's commission belongs to its own timestamp, never a later exit.
 // These events are derived; raw fills and completed Trade identities stay intact.
-export function realizedEvents(account:string,fills:Fill[]):RealizedEvent[]{
- const streams=new Map<string,Fill[]>(),events:RealizedEvent[]=[];
- for(const fill of fills){const stream=streams.get(fill.contract)||[];stream.push(fill);streams.set(fill.contract,stream);}
- for(const source of streams.values()){
-  const sorted=[...source].sort((a,b)=>Date.parse(a.time)-Date.parse(b.time)||a.ordinal-b.ordinal||a.id.localeCompare(b.id));
-  let position=0,lots:{qty:number;price:number|null}[]=[],head=0;
-  for(const fill of sorted){
-   const sign=fill.side==='Buy'?1:-1,day=fillDates(fill.time).calendar;
-   const rate=/^(LFE|LFF)/i.test(account)&&day>=LUCID_RATES_AS_OF?LUCID_PER_SIDE[fill.symbol]:undefined;
-   const event:RealizedEvent={account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross:0,commissions:rate===undefined?null:round(rate*fill.qty),net:null,exits:0,quantity:0,unmatched:0,coverageIssues:0};
-   if(fill.pos!==null){
-    const before=fill.pos-sign*fill.qty;
-    if(before!==position){
-     // A discrepancy can discard inventory without this fill closing any of
-     // it. Keep a separate coverage marker even when unmatched remains zero.
-     event.coverageIssues++;position=before;lots=before?[{qty:Math.abs(before),price:null}]:[];head=0;
-    }
-   }
-   if(position===0&&fill.pos===null&&fill.entryFlag===false){
-    event.unmatched=fill.qty;event.coverageIssues++;event.exits=1;event.quantity=fill.qty;
-   }else{
-    let remaining=fill.qty;
-    while(remaining>0){
-     if(position===0||position*sign>0){lots.push({qty:remaining,price:fill.price});position+=sign*remaining;remaining=0;}
-     else{
-      event.exits=1;const lot=lots[head];
-      if(!lot)throw new Error('Realized inventory is inconsistent.');
-      const quantity=Math.min(remaining,lot.qty);
-      if(lot.price===null)event.unmatched+=quantity;else event.gross+=(fill.price-lot.price)*(position>0?1:-1)*quantity*fill.pv;
-      event.quantity+=quantity;lot.qty-=quantity;position+=sign*quantity;remaining-=quantity;if(lot.qty===0)head++;
-      if(position===0){lots=[];head=0;}
-     }
-    }
-   }
-   if(event.unmatched>0&&event.coverageIssues===0)event.coverageIssues++;
-   event.gross=round(event.gross);
-   event.net=event.commissions===null||event.unmatched>0||event.coverageIssues>0?null:round(event.gross-event.commissions);
-   events.push(event);
-  }
- }
- return events.sort((a,b)=>Date.parse(a.time)-Date.parse(b.time)||a.ordinal-b.ordinal||a.contract.localeCompare(b.contract)||a.fillId.localeCompare(b.fillId));
+export function realizedEvents(account:string,fills:Fill[],ledger=executionLedger(fills)):RealizedEvent[]{
+ const conflicts=new Set(ledger.positionConflicts.map(conflict=>conflict.fillId));
+ return ledger.events.map(({fill,gross,quantity,unmatched,coverageIssues})=>{
+  const day=fillDates(fill.time).calendar,rate=/^(LFE|LFF)/i.test(account)&&day>=LUCID_RATES_AS_OF?LUCID_PER_SIDE[fill.symbol]:undefined,commissions=rate===undefined?null:round(rate*fill.qty);
+  return {account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross,commissions,net:commissions===null||unmatched||coverageIssues?null:round(gross-commissions),exits:quantity?1:0,quantity,unmatched,coverageIssues,...(conflicts.has(fill.id)?{positionConflict:true as const}:{})};
+ });
 }
 
 export function aggregateRealized(events:RealizedEvent[],basis:'calendar'|'session'='calendar'):RealizedDay[]{

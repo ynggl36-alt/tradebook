@@ -70,11 +70,11 @@ export function reportedAccountSessions(rows:readonly NativePnlRow[],eventsByAcc
  };
  for(const points of groups.values()){
   points.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));const first=points[0],day=flexSession(first.at),events=[...(eventGroups.get(JSON.stringify([first.account,day]))||[])].sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));
-  let index=0,total=0,fees=0,complete=true,verified=false,previous:NativePnlReading|undefined;
+  let index=0,total=0,fees=0,complete=true,disputed=false,verified=false,previous:NativePnlReading|undefined;
   for(const point of points){
-   while(index<events.length&&Date.parse(events[index].time)<=Date.parse(point.at)){const event=events[index++];complete=complete&&clean(event);total+=event.net??0;fees+=event.commissions??0;}
+   while(index<events.length&&Date.parse(events[index].time)<=Date.parse(point.at)){const event=events[index++];complete=complete&&clean(event);disputed=disputed||!!event.positionConflict;total+=event.net??0;fees+=event.commissions??0;}
    if(previous&&point.net===0&&previous.net!==0)verified=false;
-   if(complete&&fees>0&&Math.abs(round(total)-point.net)<.01)verified=true;
+   if(complete&&!disputed&&fees>0&&Math.abs(round(total)-point.net)<.01)verified=true;
    if(!verified||projections.has(series(point))){
     const projection=projectionFor(point,events),snapshot=snapshots.get(nativeReadingKey(point.account,point.at)),prefix=projection?.events.filter(event=>Date.parse(event.time)<=Date.parse(point.at));
     if(projection&&snapshot&&prefix?.length&&prefix.every(clean)&&prefix.some(event=>(event.commissions??0)>0)&&Math.abs(round(prefix.reduce((sum,event)=>sum+event.net!,0))-point.net)<.01&&positionsAgree(projection,snapshot)){verified=true;projections.set(series(point),{...projection,through:point.at});}

@@ -1,5 +1,6 @@
 import {env} from 'cloudflare:workers';
 import type {AccountHistory} from './types';
+import {reconstruct} from './reconstruct';
 import {GAP_CONTEXT_BATCH,GAP_CONTEXT_VERSION,entryPriceRange,measureGapEntry} from './gap-context';
 import type {GapEntryContext} from './gap-context';
 import {loadPriceBars,loadWeeklyGapBars} from './server-prices';
@@ -31,7 +32,7 @@ export async function loadGapContexts(input:unknown):Promise<GapContextReport>{
     const result=await env.DB.prepare(`SELECT account,data FROM account_history WHERE account IN (${chunk.map(()=>'?').join(',')})`).bind(...chunk).all<{account:string;data:string}>();
     for(const row of result.results){
       const history=JSON.parse(row.data) as AccountHistory;
-      if(history.account===row.account)histories.set(row.account,history);
+      if(history.account===row.account)histories.set(row.account,await reconstruct(row.account,history.fills.filter(fill=>Date.parse(fill.time)<=Date.now())));
     }
   }
   const rows:GapEntryContext[]=[],missing:GapTradeRef[]=[];

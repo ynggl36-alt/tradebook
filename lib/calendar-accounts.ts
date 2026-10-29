@@ -1,11 +1,9 @@
 import type {Trade} from './types';
 import type {RealizedDay} from './realized';
-import {addDays,centralDay,round,summarize} from './analytics';
+import {addDays,centralDay,round} from './analytics';
 import {parseTimestamp} from './csv';
 import {summarizeRealized} from './realized';
-import {netTradeSummary} from './trading-costs';
 
-export type CalendarMode='realized'|'closed';
 export type DayBalanceRead={at:string;value:number;provider:string;connection:string};
 export type DayAccountBalance={account:string;first:DayBalanceRead|null;last:DayBalanceRead|null;change:number|null};
 export type DayBalanceReport={day:string;asOf:string;accounts:DayAccountBalance[]};
@@ -34,13 +32,13 @@ export function dayBalanceReport(day:string,accounts:string[],points:(DayBalance
 
 // An entry-only account still traded on this date, even when its completed
 // positions close later. Realized rows include every captured entry and exit.
-export function calendarAccountRows(trades:Trade[],realized:RealizedDay[],day:string,mode:CalendarMode){
+export function calendarAccountRows(trades:Trade[],realized:RealizedDay[],day:string){
  const closed=trades.filter(t=>centralDay(t.exit)===day),activity=realized.filter(r=>r.day===day);
  const names=new Set([...activity.map(r=>r.account),...closed.map(t=>t.account)]);
  return [...names].map(account=>{
-  const completed=closed.filter(t=>t.account===account),rows=activity.filter(r=>r.account===account),daily=summarizeRealized(rows),stats=summarize(completed);
+  const completed=closed.filter(t=>t.account===account),rows=activity.filter(r=>r.account===account),daily=summarizeRealized(rows);
   return {account,symbols:[...new Set([...rows,...completed].map(r=>r.symbol))].sort(),completed:completed.length,exits:daily.exits,
-   gross:mode==='realized'?daily.gross:stats.gross,net:mode==='realized'?daily.net:completed.length?netTradeSummary(completed).net:0,
-   incomplete:mode==='realized'&&(daily.unmatched>0||daily.coverageIssues>0||(!rows.length&&completed.length>0))};
+   gross:daily.gross,net:daily.net,
+   incomplete:daily.unmatched>0||daily.coverageIssues>0||(!rows.length&&completed.length>0)};
  }).sort((a,b)=>Math.abs(b.gross)-Math.abs(a.gross)||a.account.localeCompare(b.account));
 }

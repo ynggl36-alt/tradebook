@@ -360,7 +360,7 @@ test('trendline entry lookup is canonical, bounded and read-only across 40 accou
     }
     const before=await server.loadJournalVersion(),rowsBefore=sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get();preparedQueries.length=0;
     const report=await trendEntries.loadTrendEntries(refs);const queries=[...preparedQueries];
-    assert.equal(report.rows.length,39);assert.equal(report.missing.length,1);assert.equal(report.rows.find(r=>r.account===accounts[0])!.entryPrice,null);
+    assert.equal(report.rows.length,39);assert.equal(report.missing.length,1);assert.equal(report.missing[0].account,accounts[0]);assert.equal(report.rows.find(r=>r.account===accounts[1])!.entryPrice,100);
     assert.equal(report.rows.find(r=>r.account===accounts[2])!.entryPrice,100);assert.equal(report.rows.find(r=>r.account===accounts[2])!.dir,'Long');assert.equal(queries.length,10);assert.ok(queries.every(q=>q.startsWith('SELECT account,data')));
     assert.deepEqual(await server.loadJournalVersion(),before);assert.deepEqual(sqlite.prepare('SELECT COUNT(*) AS n FROM trade_notes').get(),rowsBefore);
     await assert.rejects(()=>trendEntries.loadTrendEntries([...refs,refs[0]]),/1 to 40/);
@@ -412,7 +412,7 @@ test('late native snapshots reconcile a position-metadata disagreement from an e
   const snapshot=(m:number,cash:number)=>{const capture=integrationCapture(account,cash,time(m));(capture.accounts[0].values as any).RealizedProfitLoss={value:254,at:time(m),source:'PlatformRead'};return capture;};
   const original=sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),cashBefore=(await server.loadJournal()).cash;
   await server.saveAccountState(snapshot(6,50254));const journal=await server.loadJournal();
-  assert.equal(journal.reportedSessions!.find(row=>row.account===account)?.net,254);assert.equal(journal.realizedSessions!.find(row=>row.account===account)?.net,null);assert.equal(journal.adjustments!.some(row=>row.account===account),false);
+  assert.equal(journal.reportedSessions!.find(row=>row.account===account)?.net,254);assert.equal(journal.realizedSessions!.find(row=>row.account===account)?.net,254);assert.equal(journal.adjustments!.some(row=>row.account===account),false);
   const {accountFlexProgress}=require('../lib/account-display')as typeof import('../lib/account-display');assert.equal(accountFlexProgress(account,journal)?.payout.days,1);assert.equal(accountFlexProgress(account,journal)?.payout.cycleProfit,254);
   assert.equal('projections' in journal,false);assert.equal('reconciledEvents' in journal,false);
   await server.saveAccountState(snapshot(7,48254));const paid=await server.loadJournal(),deduction=paid.adjustments!.find(row=>row.account===account&&row.amount===-2000);assert.ok(deduction);assert.equal(deduction.kind,'payout');assert.equal(accountFlexProgress(account,paid)?.payout.days,0);
@@ -542,11 +542,61 @@ test('unchanged native amounts refresh newly verified zero-net trading, includin
   await server.saveAccountState(snapshot(time(0),159,50159));
   assert.equal((await server.loadJournal()).reportedSessions!.find(row=>row.account===account)?.net,159);
   await server.importExecutions({source:'snapshot-verification-disputed-'+i,checksum:String(7+i).repeat(64),chunk:0,fills:[fill('disputed-entry',1,'Buy',200,2),fill('disputed-exit',2,'Sell',200.5,1)]});
-  assert.equal((await server.loadJournal()).reportedSessions!.some(row=>row.account===account),false);
+  assert.equal((await server.loadJournal()).reportedSessions!.find(row=>row.account===account)?.net,159);
   if(!indexed)sqlite.prepare('DELETE FROM execution_times WHERE account=?').run(account);
   const before=await server.loadJournalVersion();await server.saveAccountState(snapshot(time(3),159,50159));
   assert.notEqual((await server.loadJournalVersion()).revision,before.revision);
   assert.equal((await server.loadJournal()).reportedSessions!.find(row=>row.account===account)?.net,159);
   const settled=await server.loadJournalVersion();await server.saveAccountState(snapshot(time(4),159,50159));assert.equal((await server.loadJournalVersion()).revision,settled.revision);
  }
+});
+
+test('legacy summaries are replaced only in read projections and restored trade IDs support reviews and charts',async()=>{
+ const account='UNIFIED-LEGACY-SOURCE',contract='MNQ 2026-12',time=(m:number)=>new Date(Date.UTC(2026,9,20,14,m)).toISOString();
+ const fills:Fill[]=[{id:'a',side:'Buy',qty:3,price:100,pos:3},{id:'b',side:'Sell',qty:3,price:110,pos:0},{id:'c',side:'Buy',qty:3,price:100,pos:5},{id:'d',side:'Sell',qty:1,price:105,pos:4},{id:'e',side:'Sell',qty:2,price:110,pos:2}].map((fill,ordinal)=>({...fill,side:fill.side as 'Buy'|'Sell',contract,symbol:'MNQ',pv:2,time:time(ordinal),ordinal}));
+ const current=await reconstruct(account,fills),legacy={...current,trades:current.trades.slice(0,1),issues:[{contract,time:time(2),remaining:2,reason:'Position discontinuity: missing or inconsistent executions'}]};
+ const summary={account,fills:fills.length,issues:legacy.issues,first:time(0),last:time(4)};
+ sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,?,?,1,?)').run(account,JSON.stringify(legacy),JSON.stringify(legacy.trades),JSON.stringify(summary),time(4));
+ const source=sqlite.prepare('SELECT data,trades_data,summary_data FROM account_history WHERE account=?').get(account);
+ try{
+  const journal=await server.loadJournal(),trades=journal.trades.filter(t=>t.account===account),rows=journal.realized!.filter(row=>row.account===account);
+  assert.equal(trades.length,2);assert.equal(trades.reduce((s,t)=>s+t.pnl,0),110);assert.equal(rows.reduce((s,row)=>s+row.gross,0),110);assert.equal(journal.accounts.find(a=>a.account===account)!.issues.length,0);
+  assert.equal(trades[0].id,legacy.trades[0].id);const restored=current.trades[1];
+  assert.equal((await server.getTrade(account,restored.id))!.trade.pnl,50);
+  await server.saveTradeNote({account,id:restored.id,setup:'Reviewed restored entry',plan:'Yes',note:'Source preserved'});
+  assert.equal((await server.loadJournal()).notes.find(n=>n.id===restored.id)!.setup,'Reviewed restored entry');
+  assert.equal((await gapContext.loadGapContexts([{account,id:restored.id}])).missing.length,0);
+  assert.equal((await trendEntries.loadTrendEntries([{account,id:restored.id}])).missing.length,0);
+  assert.deepEqual(sqlite.prepare('SELECT data,trades_data,summary_data FROM account_history WHERE account=?').get(account),source);
+  // A reviewed restored ID exists only in the read projection until an import.
+  // Backfill changes its grouping; the review must remain on the prior trade.
+  await server.importExecutions({source:'late-unified-grouping',checksum:(++integrationImport).toString(16).padStart(64,'0'),chunk:0,fills:[{account,id:'late-entry',contract,side:'Buy',qty:1,price:90,time:'2026-10-20T14:01:30.000Z',pos:1},{account,id:'late-exit',contract,side:'Sell',qty:1,price:115,time:time(5),pos:0}]});
+  const regrouped=await server.loadJournal();assert.equal(regrouped.trades.some(t=>t.id===restored.id),false);assert.equal(regrouped.notes.find(n=>n.id===restored.id)!.setup,'Reviewed restored entry');assert.equal((await server.getTrade(account,restored.id))!.trade.pnl,50);
+  const saved=JSON.parse(String(sqlite.prepare('SELECT data FROM account_history WHERE account=?').get(account)!.data));assert.ok(saved.supersededTrades.some((t:any)=>t.id===restored.id));
+ }finally{sqlite.prepare('DELETE FROM trade_notes WHERE account=?').run(account);sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
+});
+
+test('superseded trade IDs and notes survive later imports without entering current trading totals',async()=>{
+ const account='UNIFIED-ARCHIVED-IDENTITY',fills:Fill[]=[{id:'a',side:'Buy',price:100,pos:1},{id:'b',side:'Sell',price:110,pos:0}].map((f,ordinal)=>({...f,side:f.side as 'Buy'|'Sell',qty:1,contract:'MNQ 2026-12',symbol:'MNQ',pv:2,time:new Date(Date.UTC(2026,9,20,14,ordinal)).toISOString(),ordinal}));
+ const current=await reconstruct(account,fills),oldTrade={...current.trades[0],id:'legacy-superseded-identity',pnl:999},legacy={...current,trades:[...current.trades,oldTrade]};
+ sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,?,?,1,?)').run(account,JSON.stringify(legacy),JSON.stringify(legacy.trades),JSON.stringify({account,fills:2,issues:[],first:fills[0].time,last:fills[1].time}),fills[1].time);
+ try{
+  await server.saveTradeNote({account,id:oldTrade.id,setup:'Legacy review',plan:'',note:'Keep this identity'});
+  for(let i=0;i<2;i++)await server.importExecutions({source:'later-unified-'+i,checksum:(++integrationImport).toString(16).padStart(64,'0'),chunk:0,fills:[{account,id:'new-'+i,contract:'MNQ 2026-12',side:i?'Sell':'Buy',qty:1,price:i?120:110,time:new Date(Date.UTC(2026,9,20,14,2+i)).toISOString(),pos:i?0:1}]});
+  assert.equal((await server.getTrade(account,oldTrade.id))!.trade.pnl,999);
+  const journal=await server.loadJournal();assert.equal(journal.notes.find(n=>n.id===oldTrade.id)!.setup,'Legacy review');assert.equal(journal.trades.filter(t=>t.account===account).reduce((s,t)=>s+t.pnl,0),40);
+  const saved=JSON.parse(String(sqlite.prepare('SELECT data FROM account_history WHERE account=?').get(account)!.data));assert.equal(saved.supersededTrades[0].id,oldTrade.id);assert.deepEqual(saved.fills.slice(0,2),fills);
+ }finally{sqlite.prepare('DELETE FROM trade_notes WHERE account=?').run(account);sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
+});
+
+test('an earlier as-of read rejects a later cached ledger instead of inheriting its resolved coverage',async()=>{
+ const account='LFF-UNIFIED-ASOF-CACHE',fills:Fill[]=[{id:'a',side:'Buy',qty:1,price:100,pos:1},{id:'b',side:'Sell',qty:3,price:110,pos:0},{id:'c',side:'Buy',qty:2,price:120,pos:0}].map((f,ordinal)=>({...f,side:f.side as 'Buy'|'Sell',contract:'MNQ 2026-12',symbol:'MNQ',pv:2,time:new Date(Date.UTC(2026,9,20,14,ordinal)).toISOString(),ordinal}));
+ const history=await reconstruct(account,fills);
+ sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,?,?,1,?)').run(account,JSON.stringify(history),JSON.stringify(history.trades),JSON.stringify({account,fills:3,issues:[],first:fills[0].time,last:fills[2].time}),fills[2].time);
+ try{
+  await server.loadJournal();assert.ok(server.cachedRealizedEvents(account,1,Date.now()));
+  assert.equal(server.cachedRealizedEvents(account,1,Date.parse(fills[1].time)),null);
+  const {realizedEvents}=require('../lib/realized')as typeof import('../lib/realized');
+  assert.equal(realizedEvents(account,fills.slice(0,2))[1].net,null);assert.notEqual(realizedEvents(account,fills)[1].net,null);
+ }finally{sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
 });

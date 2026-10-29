@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
-import type { AccountHistory, AccountProfile, CashRecord, Fill, Journal, TradeNote } from './types';
-import { mergeFills, reconstruct } from './reconstruct';
+import type { AccountHistory, AccountProfile, CashRecord, Fill, Journal, Trade, AccountSummary, TradeNote } from './types';
+import { mergeFills, reconstruct, retainSupersededTrades } from './reconstruct';
+import {executionLedger} from './execution-ledger';
 import { normalizeContract } from './csv';
 import {currentAccountSnapshot,currentAccountSnapshots,validateAccountState} from './account-state';
 import {validateFirmReference} from './firm-reference';
@@ -20,14 +21,14 @@ import type {FirmAdjustmentNotice} from './balance-adjustments';
 export const KNOWN_FIRM_ADJUSTMENTS=firmNotices as FirmAdjustmentNotice[];
 import type {BalanceObservation,BalanceInterval,AdjustmentLabel,BalanceTracking} from './balance-adjustments';
 
-const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];nextFutureAt?:number;fills?:Fill[]}>();
+const realizedCache=new Map<string,{revision:number;rows:RealizedDay[];sessions:RealizedDay[];events:RealizedEvent[];trades:Trade[];summary:AccountSummary;nextFutureAt?:number;fills?:Fill[]}>();
 // Read-only access for bounded diagnostics. A caller must verify history size
 // and revision first; a due future execution invalidates this cached ledger.
 // This never warms the cache or updates journal metadata.
 export function cachedRealizedEvents(account:string,revision:number,asOf:number):readonly RealizedEvent[]|null{
  const cached=realizedCache.get(account);
- if(!cached||cached.revision!==revision||(cached.nextFutureAt!==undefined&&cached.nextFutureAt<=asOf))return null;
- return cached.events.filter(event=>Date.parse(event.time)<=asOf);
+ if(!cached||cached.revision!==revision||(cached.nextFutureAt!==undefined&&cached.nextFutureAt<=asOf)||Date.parse(cached.events.at(-1)?.time||'')>asOf)return null;
+ return cached.events;
 }
 export async function bumpJournalRevision(){await db().prepare("INSERT INTO journal_meta(key,value) VALUES ('change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)").run();}
 export async function loadJournalVersion(asOf=Date.now()){
@@ -181,21 +182,24 @@ export async function loadJournal():Promise<Journal>{
   // therefore always triggers another lightweight version check and refresh.
   const readingVersion=await loadJournalVersion(asOf);
   const [hs,ps,ns,cs,im,last,version,firmReferences]=await Promise.all([
-    db().prepare('SELECT account,revision,trades_data,summary_data FROM account_history ORDER BY account').all<{account:string;revision:number;trades_data:string;summary_data:string}>(),db().prepare('SELECT data FROM account_profiles').all<{data:string}>(),db().prepare('SELECT data FROM trade_notes').all<{data:string}>(),db().prepare('SELECT data FROM cash_records').all<{data:string}>(),
+    db().prepare('SELECT account,revision FROM account_history ORDER BY account').all<{account:string;revision:number}>(),db().prepare('SELECT data FROM account_profiles').all<{data:string}>(),db().prepare('SELECT data FROM trade_notes').all<{data:string}>(),db().prepare('SELECT data FROM cash_records').all<{data:string}>(),
     db().prepare('SELECT id,source,added,duplicates,imported_at AS importedAt FROM journal_imports ORDER BY imported_at DESC LIMIT 30').all(),
     db().prepare('SELECT MAX(updated) AS updated FROM account_history').first<{updated:string}>(),
     db().prepare("SELECT value FROM journal_meta WHERE key='seed_version'").first<{value:string}>(),loadFirmReferences(),
   ]);
-  const changed=hs.results.filter(h=>{const cached=realizedCache.get(h.account);return cached?.revision!==h.revision||(cached.nextFutureAt!==undefined&&cached.nextFutureAt<=asOf);});
+  const changed=hs.results.filter(h=>{const cached=realizedCache.get(h.account);return cached?.revision!==h.revision||Date.parse(cached.events.at(-1)?.time||'')>asOf||(cached.nextFutureAt!==undefined&&cached.nextFutureAt<=asOf);});
   // Read original execution payloads only for changed accounts, in bounded chunks.
   for(let offset=0;offset<changed.length;offset+=30){
     const chunk=changed.slice(offset,offset+30);
     const records=await db().prepare(`SELECT account,data,revision FROM account_history WHERE account IN (${chunk.map(()=>'?').join(',')})`).bind(...chunk.map(h=>h.account)).all<{account:string;data:string;revision:number}>();
-    for(const record of records.results){const history=JSON.parse(record.data)as AccountHistory,events=realizedEvents(record.account,history.fills.filter(fill=>Date.parse(fill.time)<=asOf)),rows=aggregateRealized(events);if(realizedCache.size>5000)realizedCache.clear();
-      // A concurrent import is reflected on the next revision check. Only cache
-      // the exact revision actually read, never label new data with an older one.
+    for(const record of records.results){
+      const history=JSON.parse(record.data)as AccountHistory,fills=history.fills.filter(fill=>Date.parse(fill.time)<=asOf),ledger=executionLedger(fills),projection=await reconstruct(record.account,fills,ledger),events=realizedEvents(record.account,fills,ledger),rows=aggregateRealized(events);
+      if(realizedCache.size>5000)realizedCache.clear();
+      // Both reports are projections of the same immutable executions. Stored
+      // legacy trade summaries remain backup evidence, never a second ledger.
+      const times=fills.map(fill=>fill.time).sort((a,b)=>Date.parse(a)-Date.parse(b)),summary:AccountSummary={account:record.account,fills:fills.length,issues:projection.issues,first:times[0]||'',last:times.at(-1)||''};
       const future=history.fills.map(fill=>Date.parse(fill.time)).filter(time=>time>asOf);
-      realizedCache.set(record.account,{revision:record.revision,rows,events,sessions:aggregateRealized(events,'session'),...(events.some(event=>event.unmatched||event.coverageIssues)?{fills:history.fills.filter(fill=>Date.parse(fill.time)<=asOf)}:{}),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
+      realizedCache.set(record.account,{revision:record.revision,rows,events,trades:projection.trades.map(({parts:_,...trade})=>trade),summary,sessions:aggregateRealized(events,'session'),...(events.some(event=>event.unmatched||event.coverageIssues||event.positionConflict)?{fills}:{}),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
     }
   }
   const realized=hs.results.flatMap(h=>realizedCache.get(h.account)?.rows||[]);
@@ -209,7 +213,7 @@ export async function loadJournal():Promise<Journal>{
   const reportedCheckpoints=uniqueCheckpoints.flatMap(row=>{const point=reportedCheckpoint(row.account,row.capturedAt,balanceData.reported,realizedCache.get(row.account)?.events||[]);return point?[point]:[];});
   const {reported,...balanceSummary}=balanceData;
   const realizedSessions=hs.results.flatMap(h=>realizedCache.get(h.account)?.sessions||[]),realizedCheckpoints=uniqueCheckpoints.map(row=>realizedCheckpoint(row.account,row.capturedAt,realizedCache.get(row.account)?.events||[]));
-  return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,reportedSessions:reported.sessions,reportedCheckpoints,...balanceSummary,revision:readingVersion.revision,trades:hs.results.flatMap(h=>JSON.parse(h.trades_data)).filter(trade=>Date.parse(trade.exit)<=asOf),accounts:hs.results.map(h=>JSON.parse(h.summary_data)),
+  return {ready:true,firmReferences,realized,realizedSessions,realizedCheckpoints,reportedSessions:reported.sessions,reportedCheckpoints,...balanceSummary,revision:readingVersion.revision,trades:hs.results.flatMap(h=>realizedCache.get(h.account)?.trades||[]),accounts:hs.results.flatMap(h=>{const summary=realizedCache.get(h.account)?.summary;return summary?[summary]:[];}),
     profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash,imports:im.results as unknown as Journal['imports'],lastSaved:last?.updated||'',seedVersion:version?.value||''};
 }
 function text(v:unknown,max=1000){if(typeof v!=='string')throw new Error('A text field is missing.');if(v.length>max)throw new Error('Text is too long.');return v.trim();}
@@ -254,8 +258,7 @@ export async function saveProfile(input:Record<string,unknown>){
 export async function saveTradeNote(input:Record<string,unknown>){
   const note:TradeNote={id:text(input.id,100),account:text(input.account,150),setup:text(input.setup??'',80),plan:text(input.plan??'',20),note:text(input.note??'',5000)};
   if(!['','Yes','No','Unclear'].includes(note.plan))throw new Error('Invalid plan status.');
-  const row=await db().prepare('SELECT data FROM account_history WHERE account=?').bind(note.account).first<{data:string}>();
-  if(!row||!(JSON.parse(row.data)as AccountHistory).trades.some(t=>t.id===note.id))throw new Error('Trade not found.');
+  if(!await getTrade(note.account,note.id))throw new Error('Trade not found.');
   await db().prepare('INSERT INTO trade_notes(id,account,data) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').bind(note.id,note.account,JSON.stringify(note)).run();await bumpJournalRevision();return note;
 }
 export function validateFill(input:Record<string,unknown>):Fill&{account:string}{
@@ -283,7 +286,7 @@ export async function importExecutions(input:Record<string,unknown>){
     const row=await db().prepare('SELECT data,revision FROM account_history WHERE account=?').bind(account).first<{data:string;revision:number}>();
     const old:AccountHistory=row?JSON.parse(row.data):{account,fills:[],trades:[],issues:[]};const merged=mergeFills(old.fills,fills);
     if(merged.conflicts.length)throw new Error('Execution '+merged.conflicts[0]+' in '+account+' differs from your saved history. No conflicting rows were overwritten.');
-    const history=merged.added?await reconstruct(account,merged.fills):old;
+    const history=merged.added?retainSupersededTrades(old,await reconstruct(account,merged.fills),(await reconstruct(account,old.fills)).trades):old;
     if(JSON.stringify(history).length>1500000)throw new Error('This account needs a larger-history import layout. Your saved history has not been changed.');
     updates.push({history,revision:row?.revision||0,fresh:!row,added:merged.added,duplicates:merged.duplicates});
   }
@@ -334,4 +337,11 @@ export async function backupResponse(){
   const iterator=chunks(),stream=new ReadableStream<Uint8Array>({async pull(controller){try{const next=await iterator.next();if(typeof next.value==='string')controller.enqueue(encoder.encode(next.value));else controller.close();}catch(error){controller.error(error);}},async cancel(){await iterator.return(undefined);}});
   return new Response(stream,{headers:{'Content-Type':'application/json','Content-Disposition':'attachment; filename="Tradebook-backup-'+new Date().toISOString().slice(0,10)+'.json"','Cache-Control':'no-store'}});
 }
-export async function getTrade(account:string,id:string){const row=await db().prepare('SELECT data FROM account_history WHERE account=?').bind(account).first<{data:string}>();if(!row)return null;const history=JSON.parse(row.data)as AccountHistory;const trade=history.trades.find(t=>t.id===id);if(!trade)return null;return {trade,fills:history.fills.filter(f=>trade.parts?.some(p=>p[0]===f.id))};}
+export async function getTrade(account:string,id:string){
+ const row=await db().prepare('SELECT data FROM account_history WHERE account=?').bind(account).first<{data:string}>();if(!row)return null;
+ const history=JSON.parse(row.data)as AccountHistory,projection=await reconstruct(account,history.fills.filter(fill=>Date.parse(fill.time)<=Date.now()));
+ // Existing source trades/notes remain addressable if a corrected episode no
+ // longer has that identity. Current reports always use the shared projection.
+ const trade=projection.trades.find(t=>t.id===id)||[...history.trades,...(history.supersededTrades||[])].find(t=>t.id===id&&Date.parse(t.exit)<=Date.now());if(!trade)return null;
+ return {trade,fills:history.fills.filter(fill=>trade.parts?.some(part=>part[0]===fill.id))};
+}

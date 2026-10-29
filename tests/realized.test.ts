@@ -19,9 +19,9 @@ test('Central-day exits and per-fill commissions stay on their actual dates acro
  const rows=realizedDays(account,[fill('1','Buy',2,100,2,'2026-10-20T04:59:00Z'),fill('2','Sell',1,110,1,'2026-10-20T05:01:00Z')]);
  assert.equal(rows.length,2);assert.equal(rows[0].day,'2026-10-19');assert.equal(rows[0].gross,0);assert.equal(rows[0].net,-3.5);assert.equal(rows[1].day,'2026-10-20');assert.equal(rows[1].gross,200);assert.equal(rows[1].net,198.25);
 });
-test('missing starting inventory and position discontinuities remain unknown instead of getting invented entry prices',()=>{
+test('missing starting inventory and a final flat claim on unbalanced fills remain incomplete',()=>{
  const missing=realizedDays(account,[fill('1','Sell',2,110,1)]);assert.equal(missing[0].unmatched,2);assert.equal(missing[0].gross,0);assert.equal(missing[0].net,null);
- const mismatch=realizedDays(account,[fill('1','Buy',1,100,1),fill('2','Sell',3,110,0)]);assert.equal(mismatch[0].unmatched,3);assert.equal(mismatch[0].net,null);
+ const mismatch=realizedDays(account,[fill('1','Buy',1,100,1),fill('2','Sell',3,110,0)]);assert.equal(mismatch[0].gross,200);assert.equal(mismatch[0].coverageIssues,1);assert.equal(mismatch[0].net,null);
  const exitOnly=fill('1','Sell',1,110,null);exitOnly.entryFlag=false;const skipped=realizedDays(account,[exitOnly]);assert.equal(skipped[0].unmatched,1);assert.equal(skipped[0].net,null);
 });
 test('MES and separate expiries remain separate inventories, and unsupported fee coverage stays unknown',()=>{
@@ -53,12 +53,13 @@ test('session aggregation follows the Chicago DST boundary in spring and fall',(
   assert.deepEqual(aggregateRealized(events,'session').map(row=>row.day),[day,next]);assert.equal(aggregateRealized(events).length,1);
  }
 });
-test('inventory disappearing to an inferred flat position remains a coverage issue even with no unmatched exit',()=>{
+test('position metadata cannot erase inventory, while an unresolved final flat claim stays incomplete',()=>{
  const events=realizedEvents(account,[fill('1','Buy',1,100,1),fill('2','Sell',1,110,-1),fill('3','Buy',1,100,0)]);
- assert.equal(events[1].unmatched,0);assert.equal(events[1].coverageIssues,1);assert.equal(events[1].net,null);
- assert.equal(events[2].gross,200);assert.equal(events[2].net,198.25);
- const total=summarizeRealized(aggregateRealized(events));assert.equal(total.unmatched,0);assert.equal(total.coverageIssues,1);assert.equal(total.net,null);assert.equal(total.commissions,5.25);
+ assert.equal(events[1].gross,200);assert.equal(events[1].unmatched,0);assert.equal(events[1].coverageIssues,0);
+ assert.equal(events[2].gross,0);assert.equal(events[2].coverageIssues,1);assert.equal(events[2].net,null);
+ const total=summarizeRealized(aggregateRealized(events));assert.equal(total.gross,200);assert.equal(total.coverageIssues,1);assert.equal(total.net,null);assert.equal(total.commissions,5.25);
 });
+
 test('checkpoint sums keep pre-ledger baselines unknown and empty clean after-deltas zero',()=>{
  const empty=realizedCheckpoint(account,'2026-10-19T14:17:43Z',[]);assert.equal(empty.net,null);assert.equal(empty.afterNet,0);
  const firstAfter=realizedEvents(account,[fill('1','Buy',1,100,1,'2026-10-19T15:00:00Z')]),after=realizedCheckpoint(account,'2026-10-19T14:17:43Z',firstAfter);
