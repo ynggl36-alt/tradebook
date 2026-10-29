@@ -29,7 +29,7 @@ Tests use synthetic executions and an in-memory SQLite database. A fresh install
 ## Data and accounting
 
 - Execution identity is `(account, execution ID)`. Duplicate imports are safe; conflicting saved fills are rejected.
-- Completed trades are flat-to-flat episodes. Realized reporting includes partial exits and commissions at their execution timestamps.
+- One execution ledger supplies daily results and completed flat-to-flat trades. Daily reporting includes partial exits and commissions at their execution timestamps.
 - Calendar days use America/Chicago midnight. Payout progress uses futures sessions beginning at 17:00 Central.
 - Native account values, dated Lucid checkpoints and execution estimates have separate sources.
 - Lucid Flex 50K payout estimates use a 90% trader share. Missing receipts and incomplete history remain unknown.

@@ -1,5 +1,6 @@
 import {env} from 'cloudflare:workers';
 import type {AccountHistory} from './types';
+import {reconstruct} from './reconstruct';
 import {firstEntryFill} from './gap-context';
 import {netTradePnl} from './trading-costs';
 import {inTrendPilot,TREND_BATCH,TREND_VERSION} from './trendlines';
@@ -23,7 +24,7 @@ export async function loadTrendEntries(input:unknown):Promise<TrendEntriesRespon
   const accounts=[...new Set(refs.map(r=>r.account))],histories=new Map<string,AccountHistory>();
   for(let offset=0;offset<accounts.length;offset+=4){
     const chunk=accounts.slice(offset,offset+4),result=await env.DB.prepare(`SELECT account,data FROM account_history WHERE account IN (${chunk.map(()=>'?').join(',')})`).bind(...chunk).all<{account:string;data:string}>();
-    for(const row of result.results){const history=JSON.parse(row.data) as AccountHistory;if(history.account===row.account)histories.set(row.account,history);}
+    for(const row of result.results){const history=JSON.parse(row.data) as AccountHistory;if(history.account===row.account)histories.set(row.account,await reconstruct(row.account,history.fills.filter(fill=>Date.parse(fill.time)<=Date.now())));}
   }
   const rows:TrendEntry[]=[],missing:TrendTradeRef[]=[];
   for(const ref of refs){

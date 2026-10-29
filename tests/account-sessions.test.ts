@@ -17,7 +17,7 @@ test('platform session values are validated with commissions and replace broken 
  const fills=[...baseline,fill(3,'Buy',5,200,7,3),fill(4,'Sell',5,195,2,4),fill(5,'Buy',5,210,7,5),fill(6,'Sell',3,240,4,6)];
  const events=realizedEvents(account,fills),rows=[row(2,159),row(3,156.5),row(4,104),row(5,101.5),row(6,280)],before=JSON.stringify({fills,rows});
  const native=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse(time(7)));
- assert.equal(native.sessions[0].net,280);assert.equal(aggregateRealized(events,'session')[0].net,null);
+ assert.equal(native.sessions[0].net,280);assert.equal(aggregateRealized(events,'session')[0].net,280);
  const adjustments=deriveBalanceAdjustments(balanceIntervals(rows.map(r=>observation(state(r),'0.5.0',true))),new Map([[account,events]]),[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
  assert.deepEqual(adjustments,[]);const progress=flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(events,'session'),reportedSessions:native.sessions});assert.equal(progress.days,1);assert.equal(progress.today,280);
  assert.equal(JSON.stringify({fills,rows}),before);
@@ -44,7 +44,7 @@ test('counter carryover cannot validate a new session and native deltas never cr
 test('a checkpoint between native reads uses only clean intervening fills and cannot cross an inventory gap',()=>{
  const events=realizedEvents(account,[...baseline,fill(3,'Buy',1,180,1,3)]),native=reportedAccountSessions([row(2,159),row(4,158.5)],new Map([[account,events]]),Date.parse(time(7)));
  const checkpoint=reportedCheckpoint(account,time(3),native,events)!;assert.equal(checkpoint.net,158.5);assert.equal(checkpoint.afterNet,0);
- const broken=realizedEvents(account,[...baseline,fill(3,'Buy',1,180,3,3)]);assert.equal(reportedCheckpoint(account,time(3),native,broken),null);
+ const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',1,180,0,3),pos:null,entryFlag:false}]);assert.equal(reportedCheckpoint(account,time(3),native,broken),null);
 });
 test('an unvalidated counter reset removes an obsolete native day value until its basis is verified again',()=>{
  const events=realizedEvents(account,baseline),native=reportedAccountSessions([row(2,159),row(3,0,50159)],new Map([[account,events]]),Date.parse(time(7)));
@@ -58,7 +58,7 @@ test('a checkpoint newer than the latest account reading never invents a negativ
 test('known fills after the latest native read advance its total, while a broken tail stays unresolved',()=>{
  const clean=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,20,3)]),native=reportedAccountSessions([row(2,159)],new Map([[account,clean]]),Date.parse(time(7)));
  assert.equal(native.sessions[0].net,149);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(clean,'session'),reportedSessions:native.sessions}).days,0);
- const broken=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,22,3)]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
+ const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',20,180,0,3),pos:null,entryFlag:false}]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
  assert.equal(partial.sessions.length,0);assert.equal(partial.readings.size,1);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(broken,'session'),reportedSessions:partial.sessions}).days,null);
 });
 
@@ -73,7 +73,7 @@ function reconcile(fills=disputed(),rows=[flatRow(),positioned(6,254)]){return r
 
 test('a late first P&L reading reconciles economic fills from an observed flat inventory without creating missing contracts',()=>{
  const fills=disputed(),rows=[flatRow(),positioned(6,254)],before=JSON.stringify({fills,rows}),native=reconcile(fills,rows),original=realizedEvents(account,fills);
- assert.equal(aggregateRealized(original,'session')[0].net,null);assert.equal(native.sessions[0].net,254);assert.equal(native.projections.size,1);
+ assert.equal(aggregateRealized(original,'session')[0].net,254);assert.equal(native.sessions[0].net,254);assert.equal(native.projections.size,1);
  const resolved=native.reconciledEvents.get(account)!;assert.equal(resolved.length,original.length);assert.deepEqual(resolved.map(e=>e.fillId),original.map(e=>e.fillId));assert.equal(aggregateRealized([...resolved],'session')[0].net,254);
  assert.equal(flexPayoutDays(account,[],[],Date.parse(time(9)),{sessions:aggregateRealized(original,'session'),reportedSessions:native.sessions}).days,1);
  assert.equal(JSON.stringify({fills,rows}),before);
@@ -96,10 +96,10 @@ test('the same verified prefix reconciles balance changes and payout checkpoints
  const fills=disputed(),rows=[flatRow(),positioned(3,156.5,[{instrument:'MNQ 12-26',side:'Long',quantity:5}]),positioned(6,254),positioned(7,254,[],{cash:48254})],native=reconcile(fills,rows),original=realizedEvents(account,fills);
  const checkpoint=reportedCheckpoint(account,time(4),native,original)!;assert.equal(checkpoint.net,254);assert.equal(checkpoint.afterNet,0);
  const stateRows=rows.filter(r=>r.net!==null).map(r=>observation(state(r),'0.5.0',true));const changes=deriveBalanceAdjustments(balanceIntervals(stateRows),native.reconciledEvents,[],[],Date.parse(time(12)),[],{nativeReadings:native.readings});
- assert.equal(changes.length,1);assert.equal(changes[0].amount,-2000);assert.equal(changes[0].kind,'payout');assert.equal(aggregateRealized(original,'session')[0].net,null);
+ assert.equal(changes.length,1);assert.equal(changes[0].amount,-2000);assert.equal(changes[0].kind,'payout');assert.equal(aggregateRealized(original,'session')[0].net,254);
 });
 test('later unresolved fills, future records and counter resets cannot extend a reconciled prefix',()=>{
- const fills=[...disputed(),fill(5,'Buy',5,220,9,7)],native=reconcile(fills,[flatRow(),positioned(6,254)]);
+ const fills=[...disputed(),{...fill(5,'Sell',5,220,0,7),pos:null,entryFlag:false}],native=reconcile(fills,[flatRow(),positioned(6,254)]);
  assert.equal(native.sessions.length,0);assert.equal(native.reconciledEvents.get(account)!.at(-1)!.coverageIssues,1);assert.equal(reportedCheckpoint(account,time(7),native,realizedEvents(account,fills)),null);
  const reset=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50250})]);assert.equal(reset.sessions.length,0);
  const future=positioned(10,254);assert.equal(reconcile(disputed(),[flatRow(),future]).sessions.length,0);

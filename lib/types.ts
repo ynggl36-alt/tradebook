@@ -15,7 +15,7 @@ export type Trade = {
   parts?: [string, number, number, string][];
 };
 export type HistoryIssue = {contract: string; reason: string; time: string; remaining: number};
-export type AccountHistory = {account: string; fills: Fill[]; trades: Trade[]; issues: HistoryIssue[]};
+export type AccountHistory = {account: string; fills: Fill[]; trades: Trade[]; issues: HistoryIssue[]; supersededTrades?:Trade[]};
 export type AccountProfile = {account: string; label: string; stage: string; status: string; notes: string};
 export type TradeNote = {id: string; account: string; setup: string; plan: string; note: string};
 export type CashRecord = {

@@ -21,22 +21,21 @@ test('calendar balance bounds use Central midnight, including the 23/25-hour DST
  assert.deepEqual(validateDayBalanceRequest({day,accounts:[' A ','A','B']}).accounts,['A','B']);
 });
 
-test('selected-day account rows retain entry-only activity and reconcile separately for realized and completed bases',()=>{
+test('selected-day account rows use daily execution results and retain entry-only activity',()=>{
  const trades=[trade(),trade(evaluation,'2026-10-22T05:00:00Z')],rows=[row(),row(funded,'NQ',-40,-43.5),{...row(evaluation,'MES',0,-.5),exits:0,quantity:0},{...row('OTHER'),day:'2026-10-20'}];
- const realized=calendarAccountRows(trades,rows,day,'realized'),closed=calendarAccountRows(trades,rows,day,'closed');
+ const realized=calendarAccountRows(trades,rows,day);
  assert.deepEqual(realized.map(r=>r.account),[funded,evaluation]);assert.equal(realized[0].gross,60);assert.equal(realized[0].net,55.5);assert.equal(realized[0].exits,2);assert.deepEqual(realized[0].symbols,['MNQ','NQ']);
  assert.equal(realized[1].completed,0);assert.equal(realized[1].net,-.5);
- assert.equal(closed.reduce((s,r)=>s+r.gross,0),100);assert.equal(closed[0].net,99);assert.equal(closed[1].net,0);
- assert.equal(calendarAccountRows([trade(funded,'2026-10-22T04:59:59Z')],[],day,'closed')[0].completed,1);
+ assert.equal(calendarAccountRows([trade(funded,'2026-10-22T04:59:59Z')],[],day)[0].completed,1);
 });
 
 test('account rows respect supplied performance/instrument scope and preserve incomplete or unknown net results',()=>{
  const trades=[trade(),{...trade(evaluation),symbol:'NQ',contract:'NQ 2026-12'}],realized=[row(),row(evaluation,'NQ',-30,null)];
  const journal={accounts:[{account:funded},{account:evaluation}],trades,realized,profiles:[],firmReferences:[]}as unknown as Journal;
- const selected=scopePerformance(journal,'funded','all','MNQ');assert.deepEqual(calendarAccountRows(selected.trades,selected.realized,day,'realized').map(r=>r.account),[funded]);
- const incomplete=calendarAccountRows([], [{...row(),net:null,unmatched:1}],day,'realized')[0];assert.equal(incomplete.net,null);assert.equal(incomplete.incomplete,true);
- assert.equal(calendarAccountRows([trade('OLDER-ACCOUNT')],[],day,'closed')[0].net,null);
- assert.deepEqual(calendarAccountRows(trades,realized,'2026-10-19','realized'),[]);
+ const selected=scopePerformance(journal,'funded','all','MNQ');assert.deepEqual(calendarAccountRows(selected.trades,selected.realized,day).map(r=>r.account),[funded]);
+ const incomplete=calendarAccountRows([], [{...row(),net:null,unmatched:1}],day)[0];assert.equal(incomplete.net,null);assert.equal(incomplete.incomplete,true);
+ assert.equal(calendarAccountRows([trade('OLDER-ACCOUNT')],[],day)[0].net,null);
+ assert.deepEqual(calendarAccountRows(trades,realized,'2026-10-19'),[]);
 });
 
 test('recorded balance endpoints retain missing/single reads and avoid comparing different sources',()=>{
