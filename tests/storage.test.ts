@@ -600,3 +600,12 @@ test('an earlier as-of read rejects a later cached ledger instead of inheriting 
   assert.equal(realizedEvents(account,fills.slice(0,2))[1].net,null);assert.notEqual(realizedEvents(account,fills)[1].net,null);
  }finally{sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);}
 });
+
+
+test('a gross-only account snapshot round-trips without inventing a balance, native net session or payout',async()=>{
+ const account='LFF05000000000871',at='2026-10-20T15:00:00.000Z',before=await server.loadJournal();
+ const capture={schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.5.1',capturedAt:at,running:true,scopePrefixes:['LFF'],accounts:[{account,currency:'USD',connected:true,connection:'Synthetic',provider:'Synthetic',values:{GrossRealizedProfitLoss:{value:240,at,source:'PlatformRead'}},positionsAvailable:true,positions:[]}]};
+ await server.saveAccountState(capture);const source=(await server.loadAccountState()).accounts.find(a=>a.account===account)!;
+ assert.equal(source.values.GrossRealizedProfitLoss?.value,240);assert.equal(source.values.CashValue,undefined);assert.equal(source.values.RealizedProfitLoss,undefined);
+ const after=await server.loadJournal();assert.equal(after.reportedSessions!.some(r=>r.account===account),false);assert.equal(after.adjustments!.some(r=>r.account===account),false);assert.deepEqual(after.cash,before.cash);assert.deepEqual(after.trades,before.trades);
+});

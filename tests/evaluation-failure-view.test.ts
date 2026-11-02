@@ -51,3 +51,18 @@ test('current cards and account review omit stale merged P&L and positions while
   html=renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}}));assert.match(html,/Realized P&amp;L · reported<\/span><strong[^>]*>\$0\.00<\/strong>/);assert.doesNotMatch(html,/933\.25/);
  }finally{accountState.accounts=original;}
 });
+
+
+test('gross-only snapshots display labelled P&L without inventing cash or a net figure',()=>{
+ const original=accountState.accounts,clock=Date.now;
+ try{
+  Date.now=()=>Date.parse(at);
+  accountState.accounts=[{...state(funded,52000),values:{GrossRealizedProfitLoss:{value:-240,at,source:'PlatformRead'}}}];
+  const cards=renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}}));
+  const detail=renderToStaticMarkup(createElement(AccountProgress,{account:funded,journal,onSaveFirm:async()=>true,busy:false}));
+  for(const html of [cards,detail]){assert.match(html,/Gross realized P&amp;L/);assert.match(html,/-\$240\.00/);assert.match(html,/Before commissions/);assert.doesNotMatch(html,/\$52,000/);}
+  assert.match(cards,/Account balances unavailable/);assert.doesNotMatch(cards,/Automatic sync/);
+  accountState.accounts[0].values.RealizedProfitLoss={value:0,at,source:'PlatformRead'};
+  const both=renderToStaticMarkup(createElement(CurrentAccountsView,{journal,profiles,onAccount:()=>{},onSetup:()=>{},onHistory:()=>{}}));assert.match(both,/Realized P&amp;L · reported<\/span><strong[^>]*>\$0\.00<\/strong>/);assert.match(both,/Gross before commissions: -\$240\.00/);
+ }finally{accountState.accounts=original;Date.now=clock;}
+});

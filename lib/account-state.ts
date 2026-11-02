@@ -1,6 +1,6 @@
 export const ACCOUNT_STATE_FILE='account-state.tradebook.xml';
 export const ACCOUNT_STATE_LIMIT=1024*1024;
-export const ACCOUNT_FIELDS=['CashValue','NetLiquidation','RealizedProfitLoss','UnrealizedProfitLoss']as const;
+export const ACCOUNT_FIELDS=['CashValue','NetLiquidation','RealizedProfitLoss','GrossRealizedProfitLoss','UnrealizedProfitLoss']as const;
 export type AccountField=typeof ACCOUNT_FIELDS[number];
 export type AccountValue={value:number;at:string;source:'PlatformRead'|'AccountItemUpdate'};
 export type OpenPosition={instrument:string;side:'Long'|'Short';quantity:number;averagePrice:number};
@@ -9,6 +9,14 @@ export type AccountStateCapture={schemaVersion:1;mode:'AccountsReadOnly';recorde
 export type AccountMonitor={capturedAt:string;running:boolean;recorderVersion:string;scopePrefixes:string[];accountsSeen:string[]};
 export type AccountStateData={monitor:AccountMonitor|null;accounts:AccountState[]};
 export const EMPTY_ACCOUNT_STATE:AccountStateData={monitor:null,accounts:[]};
+// Presentation only: a separately supplied gross value never becomes net P&L
+// or cash. An explicitly supplied net zero takes precedence over gross.
+export function reportedAccountPnl(account:AccountState|undefined){
+ const current=account?currentAccountSnapshot(account):undefined;
+ const net=current?.values.RealizedProfitLoss,gross=current?.values.GrossRealizedProfitLoss;
+ return net?{value:net,basis:'net' as const}:gross?{value:gross,basis:'gross' as const}:null;
+}
+
 // Captures are full snapshots, not patches. A missing item is unavailable;
 // neither an old value nor an assumed zero belongs to the new capture. Also
 // normalize legacy rows whose values/positions were merged across captures.
