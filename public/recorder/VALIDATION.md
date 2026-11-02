@@ -1,6 +1,6 @@
-# Recorder 0.5.0 validation
+# Recorder validation
 
-Validation scope, October 20, 2026:
+Core validation scope, October 20, 2026:
 
 - C# tree-sitter syntax parsing and passive API checks.
 - Execution callbacks copy primitive values to the bounded writer queue; queued
@@ -24,3 +24,5 @@ The environment has **no NinjaTrader Windows assemblies or native C# compiler**.
 These checks cannot prove native compilation, provider behavior, event timing or
 platform performance. Compile with F5 and compare responsiveness on the owner's
 installation before relying on automatic history.
+
+Version 0.5.1 (November 2, 2026) adds the separate GrossRealizedProfitLoss item to the existing passive account snapshot. Static syntax/passive checks and synthetic account-value/display/SQL regressions cover this addition. Native NinjaTrader compilation and provider behavior still require the owner installation.

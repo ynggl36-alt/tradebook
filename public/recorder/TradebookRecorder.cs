@@ -1,4 +1,4 @@
-// Tradebook Recorder 0.5.0 - PASSIVE ACCOUNT RECORDER
+// Tradebook Recorder 0.5.1 - PASSIVE ACCOUNT RECORDER
 // Replace the entire existing TradebookRecorder AddOn source with this file.
 // Reads executions, account values, positions and prices. No network client or order-entry commands.
 // Compile and compare the available account executions before relying on it.
@@ -166,7 +166,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             MinWidth = 520;
             MinHeight = 450;
             StackPanel panel = new StackPanel { Margin = new Thickness(20), Background = SystemColors.WindowBrush };
-            panel.Children.Add(Label("PASSIVE RECORDER - version 0.5.0", 20));
+            panel.Children.Add(Label("PASSIVE RECORDER - version 0.5.1", 20));
             panel.Children.Add(Label("Light mode records fills and connected-account snapshots. Automatic chart catch-up waits until you are flat and idle. Chrome reads the saved folder and syncs your private journal.", 14));
             panel.Children.Add(mode);
             panel.Children.Add(autoStart);
@@ -339,7 +339,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly object valueGate = new object();
         // Support is observed per account item: unknown default zero is never a balance.
         private readonly Dictionary<string, HashSet<AccountItem>> observedItems = new Dictionary<string, HashSet<AccountItem>>(StringComparer.Ordinal);
-        private static readonly AccountItem[] stateItems = new AccountItem[] { AccountItem.CashValue, AccountItem.NetLiquidation, AccountItem.RealizedProfitLoss, AccountItem.UnrealizedProfitLoss };
+        private static readonly AccountItem[] stateItems = new AccountItem[] { AccountItem.CashValue, AccountItem.NetLiquidation, AccountItem.RealizedProfitLoss, AccountItem.GrossRealizedProfitLoss, AccountItem.UnrealizedProfitLoss };
         private FileStream fileLock;
         private Task writer;
         private System.Threading.Timer reconcile;
@@ -554,7 +554,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             DateTime now = DateTime.UtcNow;
             XElement root = new XElement("TradebookAccountState", new XAttribute("schemaVersion", "1"),
-                new XAttribute("mode", "AccountsReadOnly"), new XAttribute("recorderVersion", "0.5.0"),
+                new XAttribute("mode", "AccountsReadOnly"), new XAttribute("recorderVersion", "0.5.1"),
                 new XAttribute("capturedAtUtc", Stamp(now)), new XAttribute("running", running ? "true" : "false"),
                 new XAttribute("scopePrefixes", String.Join(";", accountPrefixes)));
             foreach (Account account in currentAccounts)
@@ -1193,7 +1193,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return;
                 }
                 XElement root = new XElement("TradebookCapture",
-                    new XAttribute("schemaVersion", "1"), new XAttribute("recorderVersion", "0.5.0"),
+                    new XAttribute("schemaVersion", "1"), new XAttribute("recorderVersion", "0.5.1"),
                     new XAttribute("mode", simulatorOnly ? "Sim101Only" : "AccountsReadOnly"), new XAttribute("day", day),
                     new XAttribute("dayTimeZone", "America/Chicago"), new XAttribute("platformTimeZone", sourceTimeZone),
                     new XAttribute("savedAtUtc", Stamp(DateTime.UtcNow)), new XAttribute("warningCountThisRun", warningCount),

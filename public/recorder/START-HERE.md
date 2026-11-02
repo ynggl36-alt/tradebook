@@ -1,4 +1,4 @@
-# Tradebook recorder 0.5.0 — automatic chart history
+# Tradebook recorder 0.5.1 — automatic chart history
 
 Replace the existing source once, after trading. The recorder keeps using your
 **accounts-v2** folder and preserves saved executions. No executable installer,
@@ -10,7 +10,7 @@ extra broker login, TradingView script or daily upload is required.
 2. Open **New → NinjaScript Editor → AddOns → TradebookRecorder**.
 3. Open **TradebookRecorder.cs** as text. Copy the whole file; in the existing
    NinjaScript tab, **Ctrl+A**, paste, save and **F5**. Replace the existing AddOn.
-4. Open **New → Tradebook recorder**. Confirm the heading says **0.5.0**.
+4. Open **New → Tradebook recorder**. Confirm the heading says **0.5.1**.
 5. Keep **Connected accounts — read-only**, your **LFE; LFF** prefixes, and
    **Catch up chart history automatically while flat and idle** enabled.
    Leave **Also collect one-minute prices** unchecked for normal use.
@@ -83,3 +83,7 @@ flattening, network client or embedded credentials. Financial results, firm
 confirmations and payout records retain their separate meanings.
 
 Private journal: https://journal.example.test
+
+## Account-value coverage in 0.5.1
+
+Gross realized P&L is exported separately from realized net P&L. When net is unavailable, account cards can show the supplied gross figure labelled before commissions. This does not reconstruct cash balances or change payout accounting. An unconfirmed provider zero remains unavailable.

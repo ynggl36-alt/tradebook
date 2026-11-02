@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {accountAvailability,currentAccountSnapshot,monitorFresh,refreshAccountSnapshots,validateAccountState} from '../lib/account-state';
+import {accountAvailability,currentAccountSnapshot,monitorFresh,reportedAccountPnl,refreshAccountSnapshots,validateAccountState} from '../lib/account-state';
 import type {AccountMonitor} from '../lib/account-state';
-import {accountSyncStatus} from '../lib/recorder-status';
+import {accountSyncStatus,recorderUpdateAvailable} from '../lib/recorder-status';
 const capturedAt='2026-10-16T21:00:00.000Z',now=Date.parse(capturedAt);
 function capture(){return {schemaVersion:1,mode:'AccountsReadOnly',recorderVersion:'0.3.0',capturedAt,running:true,scopePrefixes:['LFE','LFF'],accounts:[{account:'LFE-TEST',currency:'USD',connected:true,connection:'Prop connection',provider:'Rithmic',values:{CashValue:{value:51000,at:capturedAt,source:'PlatformRead'},UnrealizedProfitLoss:{value:0,at:capturedAt,source:'AccountItemUpdate'}},positionsAvailable:true,positions:[]}]};}
 test('account snapshots distinguish missing provider data from a reported zero and preserve sources',()=>{
@@ -63,4 +63,26 @@ test('open positions cover instruments outside the execution filters and reject 
  assert.deepEqual(validateAccountState(raw,now).accounts[0].positions,raw.accounts[0].positions);
  raw.accounts[0].positions[0].quantity=-2;assert.throws(()=>validateAccountState(raw,now),/quantity/);raw.accounts[0].positions[0].quantity=2;
  raw.accounts[0].positions[0].side='Flat';assert.throws(()=>validateAccountState(raw,now),/side/);
+});
+
+
+test('gross account P&L remains a separate optional field and a net zero is never replaced by gross',()=>{
+ const raw:any=capture();raw.accounts[0].values.GrossRealizedProfitLoss={value:240,at:capturedAt,source:'PlatformRead'};
+ const a=validateAccountState(raw,now).accounts[0];assert.equal(a.values.RealizedProfitLoss,undefined);assert.equal(reportedAccountPnl(a)?.basis,'gross');assert.equal(reportedAccountPnl(a)?.value.value,240);
+ a.values.RealizedProfitLoss={value:0,at:capturedAt,source:'AccountItemUpdate'};assert.equal(reportedAccountPnl(a)?.basis,'net');assert.equal(reportedAccountPnl(a)?.value.value,0);
+ a.values.RealizedProfitLoss.at='2026-10-15T21:00:00Z';assert.equal(reportedAccountPnl(a)?.basis,'gross');a.values.GrossRealizedProfitLoss!.at='2026-10-15T21:00:00Z';assert.equal(reportedAccountPnl(a),null);
+});
+
+test('fresh heartbeat does not certify empty or incomplete balances and a supplied cash zero remains valid',()=>{
+ const a=validateAccountState(capture(),now).accounts[0],monitor:AccountMonitor={capturedAt,running:true,recorderVersion:'0.5.1',scopePrefixes:['LFE'],accountsSeen:[a.account,'LFE-SECOND']};
+ const state={phase:'watching' as const,syncEnabled:true,syncing:false,hasError:false,monitor,accounts:[a]};
+ assert.equal(accountSyncStatus({...state,accounts:[]},now),'no-accounts');
+ assert.equal(accountSyncStatus({...state,accounts:[{...a,values:{}}]},now),'missing-balances');
+ assert.equal(accountSyncStatus({...state,accounts:[a,{...a,account:'LFE-SECOND',values:{GrossRealizedProfitLoss:{value:240,at:capturedAt,source:'PlatformRead'}}}]},now),'partial-balances');
+ assert.equal(accountSyncStatus({...state,accounts:[{...a,values:{CashValue:{value:0,at:capturedAt,source:'PlatformRead'}}}]},now),'fresh');
+ assert.equal(accountSyncStatus({...state,accounts:[{...a,values:{CashValue:{value:51000,at:'2026-10-15T21:00:00Z',source:'PlatformRead'}}}]},now),'missing-balances');
+});
+
+test('the recorder update notice offers only newer supported source, never a downgrade',()=>{
+ assert.equal(recorderUpdateAvailable('0.5.0'),true);assert.equal(recorderUpdateAvailable('0.4.2'),true);assert.equal(recorderUpdateAvailable('0.5.1'),false);assert.equal(recorderUpdateAvailable('0.5.2'),false);assert.equal(recorderUpdateAvailable('0.5.10'),false);assert.equal(recorderUpdateAvailable('0.6.0'),false);assert.equal(recorderUpdateAvailable('unknown'),false);
 });
