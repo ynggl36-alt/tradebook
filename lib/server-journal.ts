@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import {journalBackupResponse} from './server-backup';
 import type { AccountHistory, AccountProfile, CashRecord, Fill, Journal, Trade, AccountSummary, TradeNote } from './types';
 import { mergeFills, reconstruct as reconstructCanonical, reconstructJournal as reconstruct, retainSupersededTrades } from './reconstruct';
 import {journalExecutionLedger as executionLedger} from './execution-ledger';
@@ -308,37 +309,10 @@ export async function importExecutions(input:Record<string,unknown>){
   return {added,duplicates,accounts:groups.size,issues:updates.reduce((s,u)=>s+u.history.issues.length,0)};
 }
 export async function backupResponse(){
-  const [hs,ps,ns,cs,im,version,accountState,firmReferences]=await Promise.all([
-    db().prepare('SELECT data FROM account_history ORDER BY account').all<{data:string}>(),
-    db().prepare('SELECT data FROM account_profiles').all<{data:string}>(),db().prepare('SELECT data FROM trade_notes').all<{data:string}>(),db().prepare('SELECT data FROM cash_records').all<{data:string}>(),
-    db().prepare('SELECT id,source,added,duplicates,imported_at AS importedAt FROM journal_imports ORDER BY imported_at').all(),
+  const [version,accountState,firmReferences]=await Promise.all([
     db().prepare("SELECT value FROM journal_meta WHERE key='seed_version'").first<{value:string}>(),storedAccountState(),loadFirmReferences(),
   ]);
-  const metadata={accountState,firmReferences,firmAdjustments:KNOWN_FIRM_ADJUSTMENTS,format:'tradebook-backup-v1',exportedAt:new Date().toISOString(),timezone:'America/Chicago',profiles:ps.results.map(r=>JSON.parse(r.data)),notes:ns.results.map(r=>JSON.parse(r.data)),cash:cs.results.map(r=>JSON.parse(r.data)),imports:im.results,seedVersion:version?.value||''};
-  const encoder=new TextEncoder();
-  const sections=[{name:'balanceObservations',sql:"SELECT json_set(data,'$.receivedAt',received_at) AS data FROM account_observations ORDER BY account,captured_at,id"},{name:'recorderCaptures',sql:"SELECT json_set(data,'$.receivedAt',received_at) AS data FROM recorder_captures ORDER BY captured_at"},{name:'adjustmentLabels',sql:'SELECT data FROM balance_adjustment_labels ORDER BY id'},{name:'executionTimes',sql:"SELECT json_object('account',account,'time',time) AS data FROM execution_times ORDER BY account,time"}];
-  async function* chunks(){
-    yield JSON.stringify(metadata).slice(0,-1)+',"history":[';
-    for(let i=0;i<hs.results.length;i++)yield (i?',':'')+hs.results[i].data;
-    for(const current of sections){
-      yield '],'+JSON.stringify(current.name)+':[';
-      for(let offset=0;;offset+=500){
-        const rows=await db().prepare(current.sql+' LIMIT 500 OFFSET ?').bind(offset).all<{data:string}>();
-        if(rows.results.length)yield (offset?',':'')+rows.results.map(row=>row.data).join(',');
-        if(rows.results.length<500)break;
-      }
-    }
-    yield '],"priceBars":[';
-    let contract='',start=-1,wrote=false;
-    for(;;){
-      const rows=await db().prepare("SELECT contract,start,json_object('id',contract||'|'||start,'contract',contract,'start',start,'end',start+60000,'open',open,'high',high,'low',low,'close',close,'volume',volume,'capturedAt',captured_at,'receivedAt',received_at) AS data FROM price_bars WHERE (contract,start)>(?,?) ORDER BY contract,start LIMIT 500").bind(contract,start).all<{contract:string;start:number;data:string}>();
-      if(rows.results.length){yield (wrote?',':'')+rows.results.map(row=>row.data).join(',');wrote=true;const last=rows.results.at(-1)!;contract=last.contract;start=last.start;}
-      if(rows.results.length<500)break;
-    }
-    yield ']}';
-  }
-  const iterator=chunks(),stream=new ReadableStream<Uint8Array>({async pull(controller){try{const next=await iterator.next();if(typeof next.value==='string')controller.enqueue(encoder.encode(next.value));else controller.close();}catch(error){controller.error(error);}},async cancel(){await iterator.return(undefined);}});
-  return new Response(stream,{headers:{'Content-Type':'application/json','Content-Disposition':'attachment; filename="Tradebook-backup-'+new Date().toISOString().slice(0,10)+'.json"','Cache-Control':'no-store'}});
+  return journalBackupResponse(db(),{accountState,firmReferences,firmAdjustments:KNOWN_FIRM_ADJUSTMENTS,format:'tradebook-backup-v1',exportedAt:new Date().toISOString(),timezone:'America/Chicago',seedVersion:version?.value||''});
 }
 export async function getTrade(account:string,id:string){
  const row=await db().prepare('SELECT data FROM account_history WHERE account=?').bind(account).first<{data:string}>();if(!row)return null;
