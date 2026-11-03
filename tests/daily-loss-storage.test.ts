@@ -33,12 +33,12 @@ function history(account:string,fills:unknown[],padding=''){
 }
 const changes=()=>sqlite.prepare('SELECT total_changes() AS n').get()!.n;
 
-test('real SQL diagnostic reconstructs pre-range inventory, excludes future fills and returns summaries without writes or raw ledger fields',async()=>{
+test('real SQL diagnostic isolates an earlier incomplete session, excludes future fills and returns summaries without writes or raw ledger fields',async()=>{
  const account='LFF05000000000101';
  history(account,[fill('1','Buy',1000,1,'2026-10-20T14:00:00Z'),fill('2','Sell',940,0),fill('3','Buy',1000,1,'2026-10-23T14:00:00Z')]);
  const before=changes();queries.length=0;
  const result=await loadDailyLoss(request([account]),asOf);
- assert.equal(queries.length,2);assert.equal(result.rows.length,1);assert.equal(result.rows[0].endNet,-1201.75);assert.equal(result.rows[0].complete,true);assert.equal(result.rows[0].fills,1);assert.equal(changes(),before);
+ assert.equal(queries.length,2);assert.equal(result.rows.length,1);assert.equal(result.rows[0].endNet,null);assert.equal(result.rows[0].complete,false);assert.equal(result.rows[0].unmatched,1);assert.equal(result.rows[0].fills,1);assert.equal(changes(),before);
  assert.doesNotMatch(JSON.stringify(result),/"(?:price|pv|fillId|ordinal|contract|trades|positions)":/);
  const future=await loadDailyLoss({...request([account]),end:'2026-10-24'},asOf);assert.equal(future.rows.length,1);
 });
@@ -69,7 +69,7 @@ test('invalid history and SQL-bound account strings remain explicit, with no que
 });
 test('a maximal date/account scope returns at most 1,464 compact session rows',async()=>{
  const accounts=Array.from({length:4},(_,i)=>'LFF0500000000020'+i),yearStart=Date.parse('2028-01-01T14:00:00Z');
- for(const account of accounts)history(account,Array.from({length:366},(_,i)=>fill(String(i+1),'Buy',1000,i+1,new Date(yearStart+i*86400000).toISOString())));
+ for(const account of accounts)history(account,Array.from({length:366},(_,i)=>[fill(String(2*i+1),'Buy',1000,1,new Date(yearStart+i*86400000).toISOString()),fill(String(2*i+2),'Sell',1001,0,new Date(yearStart+i*86400000+60000).toISOString())]).flat());
  const before=changes(),result=await loadDailyLoss({accounts,start:'2028-01-01',end:'2028-12-31',stage:'all'},Date.parse('2029-01-01T00:00:00Z'));
  assert.equal(result.rows.length,DAILY_LOSS_MAX_ROWS);assert.ok(result.rows.every(row=>row.complete));assert.equal(changes(),before);
  for(const account of accounts)sqlite.prepare('DELETE FROM account_history WHERE account=?').run(account);

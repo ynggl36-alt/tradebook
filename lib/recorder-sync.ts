@@ -5,7 +5,7 @@ export type AccountSnapshot={name:string;savedAt:number;fills:AccountFill[]};
 export type SyncReceipt={key:string;fingerprint:string};
 export const accountExecutionKey=(fill:AccountFill)=>JSON.stringify([fill.account,fill.id]);
 export const journalAccount=(name:string)=>!!name&&name.length<=150&&!/^(sim|playback)/i.test(name);
-export const executionFingerprint=(fill:AccountFill)=>JSON.stringify([fill.account,fill.id,fill.contract,fill.side,fill.qty,fill.price,Date.parse(fill.time),fill.pos,fill.entryFlag??null]);
+export const executionFingerprint=(fill:AccountFill)=>JSON.stringify([fill.account,fill.id,fill.contract,fill.side,fill.qty,fill.price,Date.parse(fill.time),fill.pos,fill.entryFlag??null,fill.sourceSequence??null]);
 
 export function pendingAccountFills(snapshots:AccountSnapshot[],receipts:SyncReceipt[]){
   const accepted=new Map(receipts.map(r=>[r.key,r.fingerprint])),unique=new Map<string,AccountFill>();

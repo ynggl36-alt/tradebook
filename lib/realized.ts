@@ -4,7 +4,7 @@ import {LUCID_PER_SIDE,LUCID_RATES_AS_OF} from './trading-costs';
 import {executionLedger} from './execution-ledger';
 
 export type RealizedDay={account:string;contract:string;symbol:string;day:string;gross:number;commissions:number|null;net:number|null;exits:number;quantity:number;unmatched:number;coverageIssues?:number};
-export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number;positionConflict?:true};
+export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number;positionConflict?:true;coverageGapAt?:string};
 export type RealizedCheckpoint={account:string;capturedAt:string;session:string;net:number|null;afterNet:number|null;coverageIssues?:number;afterCoverageIssues?:number};
 
 // Both Chicago midnight and the 17:00 session boundary occur on UTC hours,
@@ -15,16 +15,17 @@ function fillDates(time:string){
  const calendar=centralDay(time),dates={calendar,session:centralHour(time)>=17?addDays(calendar,1):calendar};
  if(centralHours.size>=18000)centralHours.clear();centralHours.set(hour,dates);return dates;
 }
-function complete(event:Pick<RealizedEvent,'net'|'unmatched'|'coverageIssues'>){return event.net!==null&&event.unmatched===0&&event.coverageIssues===0;}
+export function realizedComplete(event:Pick<RealizedEvent,'net'|'unmatched'|'coverageIssues'|'coverageGapAt'>,through=Infinity){return event.net!==null&&event.unmatched===0&&event.coverageIssues===0&&(!event.coverageGapAt||Date.parse(event.coverageGapAt)>through);}
+export function realizedGapBetween(events:readonly RealizedEvent[],from:number,to:number){return events.some(event=>event.coverageGapAt&&Date.parse(event.coverageGapAt)>from&&Date.parse(event.coverageGapAt)<=to);}
 
 // FIFO lots realize their result on each exit fill, even while other lots stay
 // open. An entry's commission belongs to its own timestamp, never a later exit.
 // These events are derived; raw fills and completed Trade identities stay intact.
 export function realizedEvents(account:string,fills:Fill[],ledger=executionLedger(fills)):RealizedEvent[]{
  const conflicts=new Set(ledger.positionConflicts.map(conflict=>conflict.fillId));
- return ledger.events.map(({fill,gross,quantity,unmatched,coverageIssues})=>{
+ return ledger.events.map(({fill,gross,quantity,unmatched,coverageIssues,coverageGapAt})=>{
   const day=fillDates(fill.time).calendar,rate=/^(LFE|LFF)/i.test(account)&&day>=LUCID_RATES_AS_OF?LUCID_PER_SIDE[fill.symbol]:undefined,commissions=rate===undefined?null:round(rate*fill.qty);
-  return {account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross,commissions,net:commissions===null||unmatched||coverageIssues?null:round(gross-commissions),exits:quantity?1:0,quantity,unmatched,coverageIssues,...(conflicts.has(fill.id)?{positionConflict:true as const}:{})};
+  return {account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross,commissions,net:commissions===null||unmatched||coverageIssues?null:round(gross-commissions),exits:quantity?1:0,quantity,unmatched,coverageIssues,...(coverageGapAt?{coverageGapAt}:{}),...(conflicts.has(fill.id)?{positionConflict:true as const}:{})};
  });
 }
 
@@ -35,9 +36,10 @@ export function aggregateRealized(events:RealizedEvent[],basis:'calendar'|'sessi
   let row=days.get(key);
   if(!row){row={account:event.account,contract:event.contract,symbol:event.symbol,day,gross:0,commissions:0,net:0,exits:0,quantity:0,unmatched:0};days.set(key,row);}
   row.gross+=event.gross;row.commissions=row.commissions===null||event.commissions===null?null:row.commissions+event.commissions;
-  row.net=row.net===null||!complete(event)?null:row.net+event.net!;
+  row.net=row.net===null||!realizedComplete(event)?null:row.net+event.net!;
   row.exits+=event.exits;row.quantity+=event.quantity;row.unmatched+=event.unmatched;
   if(event.coverageIssues)row.coverageIssues=(row.coverageIssues||0)+event.coverageIssues;
+  if(event.coverageGapAt)row.coverageIssues=(row.coverageIssues||0)+1;
  }
  return [...days.values()].map(row=>({...row,gross:round(row.gross),commissions:row.commissions===null?null:round(row.commissions),net:row.net===null?null:round(row.net)})).sort((a,b)=>a.day.localeCompare(b.day)||a.account.localeCompare(b.account)||a.contract.localeCompare(b.contract));
 }
@@ -51,11 +53,11 @@ export function realizedCheckpoint(account:string,capturedAt:string,events:Reali
   if(event.account!==account)continue;
   const time=Date.parse(event.time);
   if(fillDates(event.time).session===session){if(time<=at)before.push(event);else after.push(event);}
-  else if(time<=at){earlier=true;earlierClean=earlierClean&&complete(event);}
+  else if(time<=at){earlier=true;earlierClean=earlierClean&&realizedComplete(event,at);}
  }
- const sum=(rows:RealizedEvent[])=>rows.every(complete)?round(rows.reduce((total,event)=>total+event.net!,0)):null;
- const coverageIssues=before.reduce((total,event)=>total+event.coverageIssues,0),afterCoverageIssues=after.reduce((total,event)=>total+event.coverageIssues,0);
- return {account,capturedAt,session,net:before.length?sum(before):earlier&&earlierClean?0:null,afterNet:sum(after),...(coverageIssues?{coverageIssues}:{}),...(afterCoverageIssues?{afterCoverageIssues}:{})};
+ const sum=(rows:RealizedEvent[],through=Infinity)=>rows.every(event=>realizedComplete(event,through))?round(rows.reduce((total,event)=>total+event.net!,0)):null;
+ const coverageIssues=before.reduce((total,event)=>total+event.coverageIssues+Number(!!event.coverageGapAt&&Date.parse(event.coverageGapAt)<=at),0),gapAfter=realizedGapBetween(events.filter(event=>event.account===account&&fillDates(event.time).session===session),at,Infinity),afterCoverageIssues=after.reduce((total,event)=>total+event.coverageIssues,0)+Number(gapAfter);
+ return {account,capturedAt,session,net:before.length?sum(before,at):earlier&&earlierClean?0:null,afterNet:gapAfter?null:sum(after),...(coverageIssues?{coverageIssues}:{}),...(afterCoverageIssues?{afterCoverageIssues}:{})};
 }
 
 // Retain the existing calendar API for calendar/reporting consumers.

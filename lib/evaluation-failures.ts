@@ -30,7 +30,7 @@ export function observedEvaluationEquity(row:EvaluationObservation):{value:numbe
  if(fresh(row.equity,row.equityAt,row)&&row.equity>0)return {value:round(row.equity),source:'equity'};
  return null;
 }
-type Item={at:number;order:number;event?:RealizedEvent;point?:EvaluationObservation;floor?:number;notice?:boolean};
+type Item={at:number;order:number;event?:RealizedEvent;gap?:true;point?:EvaluationObservation;floor?:number;notice?:boolean};
 type Input={rows:readonly EvaluationObservation[];events:ReadonlyMap<string,readonly RealizedEvent[]>;profiles?:readonly AccountProfile[];references?:readonly FirmReference[];notices?:readonly FirmAdjustmentNotice[];asOf?:number};
 
 // Replay immutable observations, never just the latest balance. The first
@@ -44,7 +44,7 @@ export function evaluationFailures({rows,events,profiles=[],references=[],notice
   const profile=profiles.find(row=>row.account===account),reference=references.find(row=>row.account===account);
   if(flexAccount(account)?.stage!=='Evaluation'||accountStage(account,profile,reference)!=='Evaluation')continue;
   const items:Item[]=[];
-  for(const event of events.get(account)||[]){const at=Date.parse(event.time);if(Number.isFinite(at)&&at<=asOf)items.push({at,order:1,event});}
+  for(const event of events.get(account)||[]){const at=Date.parse(event.time);if(Number.isFinite(at)&&at<=asOf)items.push({at,order:1,event});if(event.coverageGapAt&&Date.parse(event.coverageGapAt)<=asOf)items.push({at:Date.parse(event.coverageGapAt),order:-1,gap:true});}
   for(const point of points){const at=Date.parse(point.capturedAt);if(point.connected&&point.currency==='USD'&&Number.isFinite(at)&&at<=asOf)items.push({at,order:2,point});}
   // A dated firm floor applies from its recorded time, never retroactively.
   if(reference?.minimumBalance!==null&&reference?.minimumBalance!==undefined){
@@ -62,7 +62,7 @@ export function evaluationFailures({rows,events,profiles=[],references=[],notice
   let anchor:{at:number;cash:number;prefix:number;issues:number}|undefined;
   const contradictions:{from:number;to:number}[]=[];
   for(const item of items){
-   if(item.notice)issues++;
+   if(item.notice||item.gap)issues++;
    if(item.event){const e=item.event;previousFill=item.at;if(e.net===null||e.unmatched||e.coverageIssues)issues++;else prefix=round(prefix+e.net);}
    const p=item.point;
    if(p&&p.connected&&p.currency==='USD'&&fresh(p.cash,p.cashAt,p)&&p.cash>0&&item.at-previousFill>=180000){
@@ -75,6 +75,7 @@ export function evaluationFailures({rows,events,profiles=[],references=[],notice
   }
   let balance:number|null=null,floor=INITIAL_FLOOR,day='',lastFill=-Infinity;
   for(const item of items){
+   if(item.gap)balance=null;
    const session=sessionAt(item.at);
    // Only a completed prior session can advance the trail. Intraday peaks and
    // partial-session snapshot highs never raise it. Unknown fees/inventory stop

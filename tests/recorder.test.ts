@@ -103,7 +103,7 @@ test('already-connected price-only caches re-read unchanged files once to popula
   const previous:RecorderFileInfo={...file,day:'2026-10-16',savedAt:1000,version:'0.1.1',contracts:['MNQ 2026-12'],barCount:1614,simulatorFills:11,warnings:0};
   assert.equal(needsCaptureRead(file,previous),true);
   assert.equal(needsCaptureRead(file,{...previous,simulationVersion:1}),true);
-  const current={...previous,simulationVersion:1,captureVersion:2};assert.equal(needsCaptureRead(file,current),false);
+  const current={...previous,simulationVersion:1,captureVersion:3};assert.equal(needsCaptureRead(file,current),false);
   assert.equal(needsCaptureRead({...file,lastModified:2000},current),true);
   assert.equal(needsCaptureRead({...file,size:file.size+1},current),true);
 });

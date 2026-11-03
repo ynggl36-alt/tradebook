@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {executionLedger} from '../lib/execution-ledger';
-import {reconstruct} from '../lib/reconstruct';
-import {aggregateRealized,realizedEvents,summarizeRealized} from '../lib/realized';
+import {executionLedger,journalExecutionLedger} from '../lib/execution-ledger';
+import {mergeFills,reconstruct} from '../lib/reconstruct';
+import {aggregateRealized,realizedEvents,summarizeRealized,realizedCheckpoint} from '../lib/realized';
 import {centralDay,round} from '../lib/analytics';
 import type {Fill} from '../lib/types';
 
@@ -50,4 +50,44 @@ test('an explicit exit after flat cannot become a synthetic short or consume the
  const history=await reconstruct(account,fills),events=realizedEvents(account,fills);
  assert.deepEqual(history.trades.map(t=>[t.dir,t.pnl]),[['Long',20],['Long',20]]);
  assert.equal(events[2].unmatched,1);assert.equal(events[2].net,null);assert.equal(history.issues.length,1);
+});
+
+test('intraday journal isolates a missing close while continuous overnight use remains explicit',async()=>{
+ const old={...fill('old','Buy',2,100,2,0),time:'2026-10-19T14:00:00Z'},fresh=[{...fill('new','Buy',2,200,2,0),time:'2026-10-20T14:00:00Z'},{...fill('close','Sell',2,210,0,1),time:'2026-10-20T14:01:00Z'}],fills=[old,...fresh],asOf=Date.parse('2026-10-20T15:00:00Z');
+ const ledger=journalExecutionLedger(fills,asOf),events=realizedEvents(account,fills,ledger),days=aggregateRealized(events,'session');
+ assert.equal(days.find(row=>row.day==='2026-10-20')!.gross,40);assert.equal(days.find(row=>row.day==='2026-10-20')!.net,38);
+ assert.equal(days.find(row=>row.day==='2026-10-19')!.net,null);assert.equal(days.find(row=>row.day==='2026-10-19')!.coverageIssues,1);
+ assert.equal((await reconstruct(account,fills,ledger)).trades.length,1);assert.match(ledger.issues[0].reason,/Missing close/);
+ assert.equal(executionLedger(fills).events.reduce((sum,event)=>sum+event.gross,0),440);
+});
+test('current open inventory expires at the session boundary without retroactively changing economic fill values',()=>{
+ const fills=[{...fill('open','Buy',2,100,2,0),time:'2026-10-20T14:00:00Z'}],before=journalExecutionLedger(fills,Date.parse('2026-10-20T21:59:59Z')),after=journalExecutionLedger(fills,Date.parse('2026-10-20T22:00:00Z'));
+ assert.equal(before.nextUpdateAt,Date.parse('2026-10-20T22:00:00Z'));assert.equal(after.nextUpdateAt,undefined);
+ const early=realizedEvents(account,fills,before),late=realizedEvents(account,fills,after);
+ assert.equal(aggregateRealized(early)[0].net,-1);assert.equal(aggregateRealized(late)[0].net,null);assert.equal(late[0].net,-1);assert.equal(late[0].gross,0);assert.equal(late[0].coverageGapAt,'2026-10-20T22:00:00.000Z');
+ const point=realizedCheckpoint(account,'2026-10-20T14:30:00Z',late);assert.equal(point.net,-1);assert.equal(point.afterNet,null);assert.equal(point.afterCoverageIssues,1);
+});
+test('a later session gap cannot contaminate a clean earlier checkpoint and missing opening inventory stays unknown',()=>{
+ const fills=[{...fill('a','Buy',1,100,1,0),time:'2026-10-20T14:00:00Z'},{...fill('b','Sell',1,110,0,1),time:'2026-10-20T14:01:00Z'},{...fill('orphan','Sell',2,120,0,2),time:'2026-10-27T14:00:00Z'},{...fill('tail','Buy',1,130,1,3),time:'2026-10-28T14:00:00Z'}];
+ const ledger=journalExecutionLedger(fills,Date.parse('2026-10-29T16:00:00Z')),events=realizedEvents(account,fills,ledger);
+ const checkpoint=realizedCheckpoint(account,'2026-10-20T14:00:30Z',events);assert.equal(checkpoint.net,-.5);assert.equal(checkpoint.afterNet,19.5);assert.equal(checkpoint.afterCoverageIssues,undefined);
+ assert.equal(events.find(event=>event.fillId==='orphan')!.unmatched,2);assert.equal(aggregateRealized(events,'session').find(row=>row.day==='2026-10-27')!.net,null);
+});
+test('intraday grouping follows Chicago sessions across midnight and both DST offsets',()=>{
+ for(const [entry,exit,boundary]of [['2026-10-20T23:30:00Z','2026-10-21T05:30:00Z','2026-10-21T22:00:00Z'],['2026-11-02T23:30:00Z','2026-11-03T06:30:00Z','2026-11-03T23:00:00Z']]){
+  const fills=[{...fill('a','Buy',1,100,1,0),time:entry},{...fill('b','Sell',1,110,0,1),time:exit}],ledger=journalExecutionLedger(fills,Date.parse(boundary));
+  assert.equal(ledger.episodes.length,1);assert.equal(ledger.episodes[0].pnl,20);assert.equal(ledger.issues.length,0);
+  assert.equal(journalExecutionLedger(fills.slice(0,1),Date.parse(exit)).nextUpdateAt,Date.parse(boundary));
+ }
+});
+test('capture sequence survives partial import and backfill while preserving original fill ordinals',async()=>{
+ const at='2026-10-20T14:00:00Z',fills=[{...fill('a','Buy',1,100,1,1),time:at,sourceSequence:1},{...fill('b','Sell',1,110,0,2),time:at,sourceSequence:2},{...fill('c','Buy',1,120,1,3),time:at,sourceSequence:3},{...fill('d','Sell',1,130,0,4),sourceSequence:4}];
+ const partial=mergeFills([],[fills[0],fills[2],fills[3]]),backfill=mergeFills(partial.fills,fills),expected=await reconstruct(account,fills),actual=await reconstruct(account,backfill.fills);
+ assert.deepEqual(actual.trades,expected.trades);assert.deepEqual(actual.trades.map(t=>t.pnl),[20,20]);assert.equal(backfill.fills.find(f=>f.id==='c')!.ordinal,2);
+ const legacy=partial.fills.map(({sourceSequence:_,...f})=>f),enriched=mergeFills(legacy,[fills[0],fills[2],fills[3]]);assert.equal(enriched.updated,3);assert.deepEqual(enriched.fills.map(f=>f.ordinal),legacy.map(f=>f.ordinal));
+});
+
+test('partial source-order enrichment cannot reorder trades while the tied group remains unresolved',async()=>{
+ const fills=[fill('a','Buy',1,100,1,1),fill('b','Sell',1,110,0,2),fill('c','Buy',1,120,1,3),fill('d','Sell',1,110,0,4)].map(f=>({...f,time:'2026-10-20T14:00:00Z'}));
+ const before=await reconstruct(account,fills),mixed=await reconstruct(account,fills.map(f=>f.id==='b'?{...f,sourceSequence:100}:f));assert.deepEqual(mixed.trades,before.trades);
 });

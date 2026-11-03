@@ -1,3 +1,4 @@
+import {realizedGapBetween} from './realized';
 import type {AccountState} from './account-state';
 import type {AccountProfile,CashRecord} from './types';
 import {reportedTradingDelta} from './account-sessions';
@@ -59,7 +60,7 @@ export function deriveBalanceAdjustments(intervals:BalanceInterval[],eventsByAcc
   if(!a||!b||Date.parse(b.at)<=Date.parse(a.at)||left.currency!==right.currency||right.currency!=='USD')continue;
   const from=Date.parse(a.at),to=Date.parse(b.at),events=eventsByAccount.get(after.account);
   const relevant=(events||[]).filter(event=>Date.parse(event.time)>from&&Date.parse(event.time)<=to);
-  const nativeNet=reportedTradingDelta(after.account,a.at,b.at,context.nativeReadings),unknown=nativeNet===null&&(events===undefined||relevant.some(event=>event.net===null||(event.coverageIssues||0)>0));
+  const nativeNet=reportedTradingDelta(after.account,a.at,b.at,context.nativeReadings),unknown=nativeNet===null&&(events===undefined||relevant.some(event=>event.net===null||(event.coverageIssues||0)>0)||realizedGapBetween(events||[],from,to));
   const tradingNet=nativeNet??(unknown?null:round(relevant.reduce((sum,event)=>sum+event.net!,0))),amount=tradingNet===null?null:round(b.value-a.value-tradingNet);
   if(amount!==null&&Math.abs(amount)<.01)continue;
   if(amount===null&&Math.abs(b.value-a.value)<.01)continue;

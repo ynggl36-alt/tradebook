@@ -1,6 +1,6 @@
 import {env} from 'cloudflare:workers';
 import type {AccountHistory} from './types';
-import {reconstruct} from './reconstruct';
+import {reconstructJournal as reconstruct} from './reconstruct';
 import {GAP_CONTEXT_BATCH,GAP_CONTEXT_VERSION,entryPriceRange,measureGapEntry} from './gap-context';
 import type {GapEntryContext} from './gap-context';
 import {loadPriceBars,loadWeeklyGapBars} from './server-prices';

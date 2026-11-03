@@ -1,6 +1,6 @@
 import {env} from 'cloudflare:workers';
 import type {AccountHistory} from './types';
-import {reconstruct} from './reconstruct';
+import {reconstructJournal as reconstruct} from './reconstruct';
 import {firstEntryFill} from './gap-context';
 import {netTradePnl} from './trading-costs';
 import {inTrendPilot,TREND_BATCH,TREND_VERSION} from './trendlines';

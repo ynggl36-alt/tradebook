@@ -6,7 +6,7 @@ import type {EvaluationFailure} from './evaluation-failures';
 export type Fill = {
   id: string; contract: string; symbol: string; pv: number; time: string;
   ordinal: number; side: 'Buy' | 'Sell'; qty: number; price: number;
-  pos: number | null; entryFlag?: boolean | null;
+  pos: number | null; entryFlag?: boolean | null; sourceSequence?:number;
 };
 export type Trade = {
   id: string; account: string; contract: string; symbol: string; dir: 'Long' | 'Short';

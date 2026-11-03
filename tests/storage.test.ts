@@ -32,7 +32,7 @@ test('journal revision checks observe changes and partial-exit reports preserve 
  const fills=[{account,id:'partial-entry',contract:'MES 2026-12',side:'Buy',qty:2,price:7700,time:'2026-10-19T15:00:00Z',pos:2},{account,id:'partial-exit',contract:'MES 2026-12',side:'Sell',qty:1,price:7710,time:'2026-10-19T15:01:00Z',pos:1}];
  await server.importExecutions({source:'local-partial-check',checksum:'1'.repeat(64),chunk:0,fills});
  const partial=await server.loadJournal(),after=await server.loadJournalVersion();assert.notEqual(after.revision,version.revision);assert.equal(partial.revision,after.revision);assert.equal(partial.trades.filter(t=>t.account===account).length,0);
- const rows=partial.realized!.filter(row=>row.account===account);assert.equal(rows[0].gross,50);assert.equal(rows[0].net,48.5);assert.deepEqual(partial.trades,original.trades);
+ const rows=partial.realized!.filter(row=>row.account===account);assert.equal(rows[0].gross,50);assert.equal(rows[0].net,null);assert.equal(rows[0].coverageIssues,1);assert.deepEqual(partial.trades,original.trades);
  await server.importExecutions({source:'local-duplicate-check',checksum:'2'.repeat(64),chunk:0,fills});assert.equal((await server.loadJournalVersion()).revision,after.revision);
  await server.saveProfile({account,label:'Version check',stage:'Funded',status:'Active',notes:''});assert.notEqual((await server.loadJournalVersion()).revision,after.revision);
  await server.importExecutions({source:'local-completion-check',checksum:'3'.repeat(64),chunk:0,fills:[{account,id:'partial-final',contract:'MES 2026-12',side:'Sell',qty:1,price:7720,time:'2026-10-19T15:02:00Z',pos:0}]});
@@ -139,8 +139,8 @@ function integrationCapture(account:string,cash:number|null,capturedAt:string){
 async function integrationTrade(account:string,id:string,entry:string,exit:string,entryPrice:number,exitPrice:number){
  return server.importExecutions({source:'integration-'+id,checksum:(++integrationImport).toString(16).padStart(64,'0'),chunk:0,fills:[{account,id:id+'-entry',contract:'MNQ 2026-12',side:'Buy',qty:1,price:entryPrice,time:entry,pos:1},{account,id:id+'-exit',contract:'MNQ 2026-12',side:'Sell',qty:1,price:exitPrice,time:exit,pos:0}]});
 }
-async function withSettledClock<T>(work:()=>Promise<T>):Promise<T>{
- const original=Date.now,settled=original()+10*60000;Date.now=()=>settled;
+async function withSettledClock<T>(work:()=>Promise<T>,at?:string):Promise<T>{
+ const original=Date.now,settled=at?Date.parse(at):original()+10*60000;Date.now=()=>settled;
  try{return await work();}finally{Date.now=original;}
 }
 function accountObservations(account:string){return sqlite.prepare('SELECT id,account,captured_at,origin,cash_value,data,received_at FROM account_observations WHERE account=? ORDER BY captured_at,id').all(account);}
@@ -397,10 +397,13 @@ test('funded native progress and payout reconciliation bypass bad execution posi
   assert.equal(data.adjustments!.some(r=>r.account===account),false);assert.equal(data.reportedSessions!.find(r=>r.account===account)?.net,275);
   const {accountFlexProgress}=require('../lib/account-display')as typeof import('../lib/account-display');assert.equal(accountFlexProgress(account,data)?.payout.days,1);
   const revision=await server.loadJournalVersion();await server.saveAccountState(snapshot(5,274,50275));assert.notEqual((await server.loadJournalVersion()).revision,revision.revision);
-  await server.saveAccountState(snapshot(6,274,48275));const paid=await server.loadJournal(),reset=paid.adjustments!.find(r=>r.account===account&&r.amount===-2000)!;assert.ok(reset);
+  await server.saveAccountState(snapshot(6,274,48275));
+  // This fixed historical-session fixture needs coherent receipt times too.
+  sqlite.prepare('UPDATE account_observations SET received_at=captured_at WHERE account=?').run(account);
+  const paid=await server.loadJournal(),reset=paid.adjustments!.find(r=>r.account===account&&r.amount===-2000)!;assert.ok(reset);
   assert.equal(paid.reportedCheckpoints!.find(r=>r.account===account&&r.capturedAt===time(6))?.afterNet,0);assert.equal(accountFlexProgress(account,paid)?.payout.days,0);
   assert.deepEqual(sqlite.prepare('SELECT data,trades_data FROM account_history WHERE account=?').get(account),raw);assert.deepEqual(paid.cash,data.cash);assert.deepEqual(paid.trades,data.trades);
- });
+ },'2026-10-20T18:10:00.000Z');
 });
 
 test('late native snapshots reconcile a position-metadata disagreement from an earlier flat capture without manual counts or history writes',async()=>{
@@ -608,4 +611,55 @@ test('a gross-only account snapshot round-trips without inventing a balance, nat
  await server.saveAccountState(capture);const source=(await server.loadAccountState()).accounts.find(a=>a.account===account)!;
  assert.equal(source.values.GrossRealizedProfitLoss?.value,240);assert.equal(source.values.CashValue,undefined);assert.equal(source.values.RealizedProfitLoss,undefined);
  const after=await server.loadJournal();assert.equal(after.reportedSessions!.some(r=>r.account===account),false);assert.equal(after.adjustments!.some(r=>r.account===account),false);assert.deepEqual(after.cash,before.cash);assert.deepEqual(after.trades,before.trades);
+});
+
+test('intraday cache expires at session close without another upload and clean later sessions recover independently',async()=>{
+ const original=Date.now,account='LFF-INTRADAY-CACHE';let clock=Date.parse('2026-10-20T21:59:00Z');Date.now=()=>clock;
+ try{
+  await server.importExecutions({source:'intraday-cache',checksum:'f1'.repeat(32),chunk:0,fills:[{account,id:'old-open',contract:'MNQ 2026-12',side:'Buy',qty:2,price:100,time:'2026-10-20T14:00:00Z',pos:2}]});
+  const first=await server.loadJournal(),version=await server.loadJournalVersion();assert.equal(first.realizedSessions!.find(r=>r.account===account)!.net,-1);
+  clock=Date.parse('2026-10-20T22:00:00Z');assert.notEqual((await server.loadJournalVersion()).revision,version.revision);assert.equal(server.cachedRealizedEvents(account,1,clock),null);
+  const closed=await server.loadJournal();assert.equal(closed.realizedSessions!.find(r=>r.account===account)!.net,null);assert.equal(server.cachedRealizedEvents(account,1,clock-60000),null);
+  clock=Date.parse('2026-10-21T15:00:00Z');await server.importExecutions({source:'intraday-new-day',checksum:'f2'.repeat(32),chunk:0,fills:[{account,id:'new-open',contract:'MNQ 2026-12',side:'Buy',qty:2,price:200,time:'2026-10-21T14:00:00Z',pos:2},{account,id:'new-close',contract:'MNQ 2026-12',side:'Sell',qty:2,price:210,time:'2026-10-21T14:01:00Z',pos:0}]});
+  const later=await server.loadJournal();assert.equal(later.realizedSessions!.find(r=>r.account===account&&r.day==='2026-10-21')!.gross,40);assert.equal(later.realizedSessions!.find(r=>r.account===account&&r.day==='2026-10-21')!.net,38);
+ }finally{Date.now=original;}
+});
+test('source-order enrichment is revisioned and same-timestamp backfill matches a complete import',async()=>{
+ const account='SOURCE-ORDER-INTEGRATION',time='2026-10-20T14:00:00Z',fills=[{id:'a',side:'Buy',price:100,pos:1,sourceSequence:1},{id:'b',side:'Sell',price:110,pos:0,sourceSequence:2},{id:'c',side:'Buy',price:120,pos:1,sourceSequence:3},{id:'d',side:'Sell',price:130,pos:0,sourceSequence:4}].map((f,i)=>({...f,account,contract:'MNQ 2026-12',qty:1,time:i===3?'2026-10-20T14:01:00Z':time}));
+ const legacy=[fills[0],fills[2],fills[3]].map(({sourceSequence:_,...f})=>f);
+ await server.importExecutions({source:'source-order-legacy',checksum:'f3'.repeat(32),chunk:0,fills:legacy});const version=await server.loadJournalVersion();
+ const enriched=await server.importExecutions({source:'source-order-enrich',checksum:'f4'.repeat(32),chunk:0,fills:[fills[0],fills[2],fills[3]]});assert.equal(enriched.added,0);assert.notEqual((await server.loadJournalVersion()).revision,version.revision);
+ await server.importExecutions({source:'source-order-backfill',checksum:'f5'.repeat(32),chunk:0,fills});const j=await server.loadJournal();assert.deepEqual(j.trades.filter(t=>t.account===account).map(t=>t.pnl),[20,20]);
+ assert.equal((await server.importExecutions({source:'source-order-repeat',checksum:'f5'.repeat(32),chunk:0,fills})).replayed,true);
+});
+
+test('former continuous projection IDs remain compatibility evidence through intraday imports',async()=>{
+ const account='CONTINUOUS-REFERENCE-COMPAT',fills:Fill[]=[{id:'old-open',side:'Buy',price:100,pos:1,time:'2026-10-19T14:00:00Z'},{id:'old-close',side:'Sell',price:110,pos:0,time:'2026-10-20T14:00:00Z'}].map((f,ordinal)=>({...f,side:f.side as 'Buy'|'Sell',qty:1,contract:'MNQ 2026-12',symbol:'MNQ',pv:2,ordinal}));
+ const continuous=await reconstruct(account,fills),id=continuous.trades[0].id,history={account,fills,trades:[],issues:[]};
+ sqlite.prepare('INSERT INTO account_history(account,data,trades_data,summary_data,revision,updated) VALUES (?,?,?,?,1,?)').run(account,JSON.stringify(history),'[]',JSON.stringify({account,fills:2,issues:[],first:fills[0].time,last:fills[1].time}),fills[1].time);
+ assert.equal((await server.getTrade(account,id))!.trade.pnl,20);await server.saveTradeNote({account,id,setup:'Preserved',plan:'',note:'Compatibility evidence'});
+ await server.importExecutions({source:'continuous-compat-new-session',checksum:'f6'.repeat(32),chunk:0,fills:[{account,id:'new-open',contract:'MNQ 2026-12',side:'Buy',qty:1,price:100,time:'2026-10-21T14:00:00Z',pos:1},{account,id:'new-close',contract:'MNQ 2026-12',side:'Sell',qty:1,price:115,time:'2026-10-21T14:01:00Z',pos:0}]});
+ const stored=JSON.parse(sqlite.prepare('SELECT data FROM account_history WHERE account=?').get(account)!.data as string);assert.ok(stored.supersededTrades.some((t:any)=>t.id===id));
+ const journal=await server.loadJournal();assert.equal(journal.trades.some(t=>t.account===account&&t.id===id),false);assert.equal((await server.getTrade(account,id))!.trade.pnl,20);assert.ok(journal.notes.some(n=>n.id===id));
+});
+
+test('late and overlapping roster captures revoke idle-counter fallback without rewriting historical observations',async()=>{
+ for(const overlap of [false,true]){
+  const account=overlap?'LFF-ROSTER-OVERLAP':'LFF-ROSTER-LATE',time=(m:number)=>'2026-10-20T20:'+String(m+(overlap?10:0)).padStart(2,'0')+':00.000Z';
+  await integrationTrade(account,'roster-gap-'+overlap,time(1),time(2),100,180);
+  const snapshot=(m:number,net:number)=>{const capture=integrationCapture(account,50159,time(m));(capture.accounts[0].values as any).RealizedProfitLoss={value:net,at:time(m),source:'PlatformRead'};return capture;};
+  const omission=snapshot(4,0);omission.accounts=overlap?[{...omission.accounts[0],account:account+'-OTHER'}]:[];
+  // Upload the omission first: the later-arriving earlier account did not yet
+  // exist, so no per-account not-seen record can have been created for it.
+  await server.saveAccountState(omission);await server.saveAccountState(snapshot(3,159));await server.saveAccountState(snapshot(5,0));
+  assert.equal(accountObservations(account).some(row=>row.origin==='not-seen'),false);
+  const before=accountObservations(account),journal=await server.loadJournal();assert.equal(journal.reportedSessions!.some(row=>row.account===account),false);assert.deepEqual(accountObservations(account),before);
+ }
+});
+
+test('a late omission gap survives an intermediate account observation without usable P&L',async()=>{
+ const account='LFF-ROSTER-INELIGIBLE',time=(m:number)=>'2026-10-20T20:'+String(m+20).padStart(2,'0')+':00.000Z';await integrationTrade(account,'roster-ineligible',time(1),time(2),100,180);
+ const snapshot=(m:number,net:number|null)=>{const capture=integrationCapture(account,50159,time(m));if(net!==null)(capture.accounts[0].values as any).RealizedProfitLoss={value:net,at:time(m),source:'PlatformRead'};return capture;};
+ await server.saveAccountState({...snapshot(4,null),accounts:[]});await server.saveAccountState(snapshot(3,159));await server.saveAccountState(snapshot(5,null));await server.saveAccountState(snapshot(6,200));
+ assert.equal((await server.loadJournal()).reportedSessions!.some(row=>row.account===account),false);
 });
