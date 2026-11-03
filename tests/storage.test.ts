@@ -226,7 +226,7 @@ test('editing a payout note preserves its amount basis, split, approval timestam
 
 test('portable backups retain immutable observations, receipts, owner labels, execution indexes and unknown-amount notices without changing cash',async()=>{
  const before=await server.loadJournal(),observations=Number(sqlite.prepare('SELECT COUNT(*) AS count FROM account_observations').get()!.count),captures=Number(sqlite.prepare('SELECT COUNT(*) AS count FROM recorder_captures').get()!.count),backup=await readPortableBackup();
- assert.equal(backup.format,'tradebook-backup-v1');assert.equal(backup.balanceObservations.length,observations);assert.equal(backup.recorderCaptures.length,captures);assert.deepEqual(backup.cash,before.cash);assert.deepEqual(backup.firmAdjustments,KNOWN_FIRM_ADJUSTMENTS);assert.equal(backup.firmAdjustments.every((row:any)=>row.amount===null),true);
+ assert.equal(backup.format,'tradebook-backup-v1');assert.equal(backup.balanceObservations.length,observations);assert.equal(backup.recorderCaptures.length,captures);assert.deepEqual(backup.cash,[...before.cash].sort((a,b)=>a.id.localeCompare(b.id)));assert.deepEqual(backup.firmAdjustments,KNOWN_FIRM_ADJUSTMENTS);assert.equal(backup.firmAdjustments.every((row:any)=>row.amount===null),true);
  const observation=backup.balanceObservations.find((row:any)=>row.account===integrationAccounts.archive&&row.origin==='capture');assert.equal(observation.state.values.CashValue.value,53000);assert.equal(observation.recorderVersion,'0.4.2');assert.ok(Number.isFinite(Date.parse(observation.receivedAt)));
  const capture=backup.recorderCaptures.find((row:any)=>row.capturedAt===observation.capturedAt);assert.equal(capture.running,true);assert.ok(capture.accountsSeen.includes(integrationAccounts.archive));assert.ok(Number.isFinite(Date.parse(capture.receivedAt)));
  assert.ok(backup.adjustmentLabels.some((row:any)=>row.note==='Owner classification before late snapshot'&&row.kind==='firm-adjustment'));
@@ -239,14 +239,14 @@ test('portable backups complete when all new source sections are empty and when 
  const cash=(await server.loadJournal()).cash;sqlite.exec('SAVEPOINT backup_pagination');
  try{
   for(const table of ['account_observations','recorder_captures','balance_adjustment_labels','execution_times'])sqlite.prepare('DELETE FROM '+table).run();
-  const empty=await readPortableBackup();for(const section of ['balanceObservations','recorderCaptures','adjustmentLabels','executionTimes'])assert.deepEqual(empty[section],[]);assert.deepEqual(empty.cash,cash);
+  const empty=await readPortableBackup();for(const section of ['balanceObservations','recorderCaptures','adjustmentLabels','executionTimes'])assert.deepEqual(empty[section],[]);assert.deepEqual(empty.cash,[...cash].sort((a,b)=>a.id.localeCompare(b.id)));
   const insert=sqlite.prepare('INSERT INTO account_observations(id,account,captured_at,origin,cash_value,data,received_at) VALUES (?,?,?,?,?,?,?)'),name='LFF05000000000018',start=Date.parse('2026-10-18T20:00:00.000Z');
   for(let index=0;index<500;index++){
    const at=new Date(start+index*1000).toISOString(),input=integrationCapture(name,50000,at).accounts[0],row={id:name+'@'+at,account:name,capturedAt:at,origin:'capture',recorderVersion:'0.4.2',running:true,state:{...input,capturedAt:at,positionsAt:at}};
    insert.run(row.id,name,at,'capture',50000,JSON.stringify(row),at);
   }
   const page=await readPortableBackup();assert.equal(page.balanceObservations.length,500);assert.equal(new Set(page.balanceObservations.map((row:any)=>row.id)).size,500);assert.equal(page.balanceObservations[499].receivedAt,'2026-10-18T20:08:19.000Z');
-  for(const section of ['recorderCaptures','adjustmentLabels','executionTimes'])assert.deepEqual(page[section],[]);assert.deepEqual(page.cash,cash);assert.deepEqual(page.firmAdjustments,KNOWN_FIRM_ADJUSTMENTS);
+  for(const section of ['recorderCaptures','adjustmentLabels','executionTimes'])assert.deepEqual(page[section],[]);assert.deepEqual(page.cash,[...cash].sort((a,b)=>a.id.localeCompare(b.id)));assert.deepEqual(page.firmAdjustments,KNOWN_FIRM_ADJUSTMENTS);
  }finally{sqlite.exec('ROLLBACK TO backup_pagination');sqlite.exec('RELEASE backup_pagination');}
 });
 

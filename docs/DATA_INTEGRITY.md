@@ -34,3 +34,9 @@ NinjaTrader `Account.Executions` supplies its exposed current-session collection
 Economic amendments/removals remain an explicit review path: immutable-ID conflicts halt the affected import batch, and recorder removal warnings require source review. This release does not implement automatic financial correction/quarantine. Ambiguous manually supplied same-timestamp sequences also cannot be certified from capture order that was never supplied.
 
 Imports, history-size guards and diagnostics are bounded and fail visibly instead of truncating source records. Retained observation scans still require capacity profiling as history grows; current validation is not a guarantee of unlimited retention or of undocumented provider behavior. Windows compilation/provider performance require native verification when recorder code changes.
+
+## Backup transport
+
+The portable backup retains format `tradebook-backup-v1` and the same source fields. The history, profile, note, cash, import, observation, capture, adjustment-label, execution-index and price-bar arrays stream in bounded primary-key pages; history reads at most four accounts per page, and these other arrays at most 500 rows. Current account-state and firm-reference metadata remain separate eager reads. The export does not repeatedly scan already exported rows with OFFSET. Array order is transport order, not trading or posting chronology.
+
+Exports are live reads across multiple queries, not an atomic database snapshot. Concurrent inserts ahead of a cursor can appear once; inserts behind a cursor or edits to already emitted records require a later export. A database failure rejects the download rather than producing a successful truncated backup. Individual record size, invocation limits and concurrent database load still bound a single export; this does not certify unlimited retention.
