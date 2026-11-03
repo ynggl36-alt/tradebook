@@ -75,7 +75,7 @@ export function validateCapture(rows: CaptureRows, filename?: string): RecorderC
     const at=utc(fill.Time,'execution time');if(at>savedAt)throw new Error('A simulator execution is later than its capture.');
     const pos=number(fill.RawAccountPosition,'reported simulator position');
     if(!Number.isSafeInteger(pos))throw new Error('Invalid reported simulator position.');
-    return {account:fill.Account,id:fill.ID,...contract,side,qty,price,time:new Date(at).toISOString(),ordinal,pos} as AccountFill;
+    return {account:fill.Account,id:fill.ID,...contract,side,qty,price,time:new Date(at).toISOString(),ordinal,pos,sourceSequence:ordinal} as AccountFill;
   }).sort((a,b)=>a.time.localeCompare(b.time)||a.ordinal-b.ordinal);
   const unique = new Map<string,PriceBar>();
   for (const raw of rows.bars) {

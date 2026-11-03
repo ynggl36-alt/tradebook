@@ -22,7 +22,7 @@ export type RecorderFileInfo = {
 };
 export type RecorderSummary = {files:RecorderFileInfo[];barCount:number};
 export type DirectoryPickerWindow = Window & {showDirectoryPicker?:(options:{id:string;mode:'read'})=>Promise<RecorderDirectory>};
-export const needsCaptureRead=(file:Pick<File,'name'|'size'|'lastModified'>,known?:RecorderFileInfo)=>!known||known.captureVersion!==2||file.size!==known.size||file.lastModified!==known.lastModified;
+export const needsCaptureRead=(file:Pick<File,'name'|'size'|'lastModified'>,known?:RecorderFileInfo)=>!known||known.captureVersion!==3||file.size!==known.size||file.lastModified!==known.lastModified;
 
 export function parseRecorderXml(xml: string, filename?: string): RecorderCapture {
   if (xml.length > RECORDER_FILE_LIMIT) throw new Error('Choose a capture under 25 MB.');
@@ -111,7 +111,7 @@ export async function acknowledgeAccountFills(fills:AccountFill[],result:SyncRes
   const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(['syncReceipts','settings'],'readwrite');for(const fill of fills)tx.objectStore('syncReceipts').put({key:accountExecutionKey(fill),fingerprint:executionFingerprint(fill)} satisfies SyncReceipt);tx.objectStore('settings').put({...result,at:Date.now()} satisfies LastExecutionSync,'lastExecutionSync');tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
 }
 export async function cacheCapture(file: Pick<File,'name'|'size'|'lastModified'>, capture:RecorderCapture) {
-  const db=await database();const info:RecorderFileInfo={name:file.name,size:file.size,lastModified:file.lastModified,day:capture.day,savedAt:capture.savedAt,version:capture.version,contracts:capture.contracts,barCount:capture.bars.length,simulatorFills:capture.simulatorFills,warnings:capture.warnings,simulationVersion:1,captureVersion:2,mode:capture.mode,accountFills:capture.accountFills.length};
+  const db=await database();const info:RecorderFileInfo={name:file.name,size:file.size,lastModified:file.lastModified,day:capture.day,savedAt:capture.savedAt,version:capture.version,contracts:capture.contracts,barCount:capture.bars.length,simulatorFills:capture.simulatorFills,warnings:capture.warnings,simulationVersion:1,captureVersion:3,mode:capture.mode,accountFills:capture.accountFills.length};
   await new Promise<void>((resolve,reject)=>{
     const tx=db.transaction(['bars','files','simulation','accountCaptures','priceUploads'],'readwrite'), bars=tx.objectStore('bars');
     for (const incoming of capture.bars) {
@@ -120,7 +120,7 @@ export async function cacheCapture(file: Pick<File,'name'|'size'|'lastModified'>
       old.onsuccess=()=>{if(!incoming.observed&&old.result&&priceValuesFingerprint(old.result)===priceValuesFingerprint(incoming))bar={...incoming,capturedAt:old.result.capturedAt};if(newestPriceBar(old.result,bar)===bar){bars.put(bar);if(bar.start>=Date.UTC(2026,0,1)&&(!old.result||priceFingerprint(old.result)!==priceFingerprint(bar)))tx.objectStore('priceUploads').put(bar);}};
     }
     const previous=tx.objectStore('files').get(file.name);
-    previous.onsuccess=()=>{tx.objectStore('files').put(!previous.result||previous.result.savedAt<=info.savedAt?info:{...previous.result,lastModified:info.lastModified,size:info.size,simulationVersion:1,captureVersion:2});};
+    previous.onsuccess=()=>{tx.objectStore('files').put(!previous.result||previous.result.savedAt<=info.savedAt?info:{...previous.result,lastModified:info.lastModified,size:info.size,simulationVersion:1,captureVersion:3});};
     const store=tx.objectStore(capture.mode==='Sim101Only'?'simulation':'accountCaptures'),old=store.get(file.name);
     old.onsuccess=()=>{if(!old.result||old.result.savedAt<=capture.savedAt)store.put({name:file.name,savedAt:capture.savedAt,fills:capture.mode==='Sim101Only'?capture.simulation:capture.accountFills});};
     tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);

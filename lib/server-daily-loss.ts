@@ -1,3 +1,4 @@
+import {journalExecutionLedger} from './execution-ledger';
 import {env} from 'cloudflare:workers';
 import type {AccountHistory,AccountProfile} from './types';
 import type {FirmReference} from './firm-reference';
@@ -49,10 +50,11 @@ export async function loadDailyLoss(input:unknown,asOf=Date.now()):Promise<Daily
     const saved=histories.get(account);
     if(!saved){report.unavailable.push({account,reason:'changed'});continue;}
     const history=JSON.parse(saved.data)as AccountHistory;
-    if(history.account!==account||!Array.isArray(history.fills)||history.fills.length!==row.metadata.fills||history.fills.some(fill=>!fill||typeof fill.id!=='string'||!fill.id||typeof fill.contract!=='string'||!fill.contract||typeof fill.symbol!=='string'||!fill.symbol||!Number.isFinite(Date.parse(fill.time))||!['Buy','Sell'].includes(fill.side)||!Number.isSafeInteger(fill.qty)||fill.qty<=0||!Number.isFinite(fill.price)||!Number.isFinite(fill.pv)||fill.pv<=0||!Number.isSafeInteger(fill.ordinal)||fill.pos!==null&&!Number.isSafeInteger(fill.pos)))throw new Error('Invalid account history.');
+    if(history.account!==account||!Array.isArray(history.fills)||history.fills.length!==row.metadata.fills||history.fills.some(fill=>!fill||typeof fill.id!=='string'||!fill.id||typeof fill.contract!=='string'||!fill.contract||typeof fill.symbol!=='string'||!fill.symbol||!Number.isFinite(Date.parse(fill.time))||!['Buy','Sell'].includes(fill.side)||!Number.isSafeInteger(fill.qty)||fill.qty<=0||!Number.isFinite(fill.price)||!Number.isFinite(fill.pv)||fill.pv<=0||!Number.isSafeInteger(fill.ordinal)||(fill.sourceSequence!==undefined&&(!Number.isSafeInteger(fill.sourceSequence)||fill.sourceSequence<=0))||fill.pos!==null&&!Number.isSafeInteger(fill.pos)))throw new Error('Invalid account history.');
     // Earlier fills establish FIFO inventory even if their session is outside
     // the requested dates. Future executions never enter a retrospective path.
-    events=realizedEvents(account,history.fills.filter(fill=>Date.parse(fill.time)<=asOf));
+    const fills=history.fills.filter(fill=>Date.parse(fill.time)<=asOf);
+    events=realizedEvents(account,fills,journalExecutionLedger(fills,asOf));
    }
    report.rows.push(...dailyLossSessions(account,events,request.start,request.end,row.classification));
   }catch{report.unavailable.push({account,reason:'invalid-history'});}

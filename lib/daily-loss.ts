@@ -72,10 +72,10 @@ export function dailyLossSessions(account:string,events:readonly RealizedEvent[]
   if(day<start||day>end)continue;
   let bucket=days.get(day);if(!bucket){bucket={groups:new Map(),fills:0,missingFees:0,unmatched:0,coverageIssues:0};days.set(day,bucket);}
   const group=bucket.groups.get(at)||{time:new Date(at).toISOString(),cents:0,complete:true};
-  group.complete=group.complete&&event.net!==null&&Number.isFinite(event.net)&&Number.isSafeInteger(Math.round(event.net*100))&&event.commissions!==null&&event.unmatched===0&&event.coverageIssues===0;
+  group.complete=group.complete&&event.net!==null&&Number.isFinite(event.net)&&Number.isSafeInteger(Math.round(event.net*100))&&event.commissions!==null&&event.unmatched===0&&event.coverageIssues===0&&!event.coverageGapAt;
   if(event.net!==null&&Number.isFinite(event.net))group.cents+=Math.round(event.net*100);
   group.complete=group.complete&&Number.isSafeInteger(group.cents);
-  bucket.groups.set(at,group);bucket.fills++;bucket.missingFees+=Number(event.commissions===null);bucket.unmatched+=event.unmatched;bucket.coverageIssues+=event.coverageIssues;
+  bucket.groups.set(at,group);bucket.fills++;bucket.missingFees+=Number(event.commissions===null);bucket.unmatched+=event.unmatched;bucket.coverageIssues+=event.coverageIssues+Number(!!event.coverageGapAt);
  }
  return [...days].sort(([a],[b])=>a.localeCompare(b)).map(([day,bucket])=>{
   const groups=[...bucket.groups].sort(([a],[b])=>a-b).map(([,group])=>group),complete=groups.every(group=>group.complete);

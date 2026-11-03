@@ -146,3 +146,18 @@ test('a P&L counter reset coinciding with a cash deduction cannot turn the previ
  const realLoss=realizedEvents(account,[...baseline,fill(3,'Buy',1,200,1,3),fill(4,'Sell',1,121,0,4)]),known=reportedAccountSessions([row(2,159),row(5,0,50000)],new Map([[account,realLoss]]),Date.parse(time(7)));
  assert.equal(known.sessions[0].net,0);
 });
+
+test('native corroboration uses only target-session inventory and includes fills exactly at its opening boundary',()=>{
+ const {journalExecutionLedger}=require('../lib/execution-ledger')as typeof import('../lib/execution-ledger');
+ const fills=[{...fill(1,'Buy',2,50,2,0),time:'2026-10-16T14:00:00Z'},{...fill(2,'Buy',1,100,3,1),time:'2026-10-19T22:00:00Z'},{...fill(3,'Sell',1,110,2,2),time:'2026-10-19T22:01:00Z'}];
+ const at='2026-10-19T22:02:00Z',anchor='2026-10-19T21:59:00Z',native=(time:string,net:number):NativePnlRow=>({...row(0,net),capturedAt:time,netAt:time,cashAt:time,net,cash:50000+net,positionsAvailable:1,positionsAt:time,positionData:'[]'});
+ const ledger=journalExecutionLedger(fills,Date.parse(at)),events=realizedEvents(account,fills,ledger),result=reportedAccountSessions([native(anchor,0),native(at,19)],new Map([[account,events]]),Date.parse(at),new Map([[account,fills]]));
+ assert.equal(result.sessions.find(session=>session.day==='2026-10-20')!.net,19);assert.equal(result.projections.size,1);
+ assert.equal(aggregateRealized(result.reconciledEvents.get(account)!,'session').find(row=>row.day==='2026-10-20')!.net,19);
+});
+
+test('a roster gap on an ineligible account reading revokes the next native point too',()=>{
+ const events=realizedEvents(account,baseline),rows=[row(2,159),row(4,0,50159,{net:null,netAt:null,rosterGapBefore:1}),row(5,200,50200)];
+ const result=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse(time(6)));
+ assert.equal(result.sessions.length,0);assert.equal(result.readings.has(account+'@'+time(2)),true);assert.equal(result.readings.has(account+'@'+time(5)),false);
+});
