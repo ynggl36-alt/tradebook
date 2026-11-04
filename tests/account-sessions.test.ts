@@ -44,7 +44,7 @@ test('counter carryover cannot validate a new session and native deltas never cr
 test('a checkpoint between native reads uses only clean intervening fills and cannot cross an inventory gap',()=>{
  const events=realizedEvents(account,[...baseline,fill(3,'Buy',1,180,1,3)]),native=reportedAccountSessions([row(2,159),row(4,158.5)],new Map([[account,events]]),Date.parse(time(7)));
  const checkpoint=reportedCheckpoint(account,time(3),native,events)!;assert.equal(checkpoint.net,158.5);assert.equal(checkpoint.afterNet,0);
- const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',1,180,0,3),pos:null,entryFlag:false}]);assert.equal(reportedCheckpoint(account,time(3),native,broken),null);
+ const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',1,180,0,3),entryFlag:false}]);assert.equal(reportedCheckpoint(account,time(3),native,broken),null);
 });
 test('an unvalidated counter reset removes an obsolete native day value until its basis is verified again',()=>{
  const events=realizedEvents(account,baseline),native=reportedAccountSessions([row(2,159),row(3,0,50159)],new Map([[account,events]]),Date.parse(time(7)));
@@ -58,7 +58,7 @@ test('a checkpoint newer than the latest account reading never invents a negativ
 test('known fills after the latest native read advance its total, while a broken tail stays unresolved',()=>{
  const clean=realizedEvents(account,[...baseline,fill(3,'Buy',20,180,20,3)]),native=reportedAccountSessions([row(2,159)],new Map([[account,clean]]),Date.parse(time(7)));
  assert.equal(native.sessions[0].net,149);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(clean,'session'),reportedSessions:native.sessions}).days,0);
- const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',20,180,0,3),pos:null,entryFlag:false}]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
+ const broken=realizedEvents(account,[...baseline,{...fill(3,'Sell',20,180,0,3),entryFlag:false}]),partial=reportedAccountSessions([row(2,159)],new Map([[account,broken]]),Date.parse(time(7)));
  assert.equal(partial.sessions.length,0);assert.equal(partial.readings.size,1);assert.equal(flexPayoutDays(account,[],[],Date.parse(time(7)),{sessions:aggregateRealized(broken,'session'),reportedSessions:partial.sessions}).days,null);
 });
 
@@ -99,7 +99,7 @@ test('the same verified prefix reconciles balance changes and payout checkpoints
  assert.equal(changes.length,1);assert.equal(changes[0].amount,-2000);assert.equal(changes[0].kind,'payout');assert.equal(aggregateRealized(original,'session')[0].net,254);
 });
 test('later unresolved fills, future records and counter resets cannot extend a reconciled prefix',()=>{
- const fills=[...disputed(),{...fill(5,'Sell',5,220,0,7),pos:null,entryFlag:false}],native=reconcile(fills,[flatRow(),positioned(6,254)]);
+ const fills=[...disputed(),{...fill(5,'Sell',5,220,0,7),entryFlag:false}],native=reconcile(fills,[flatRow(),positioned(6,254)]);
  assert.equal(native.sessions.length,0);assert.equal(native.reconciledEvents.get(account)!.at(-1)!.coverageIssues,1);assert.equal(reportedCheckpoint(account,time(7),native,realizedEvents(account,fills)),null);
  const reset=reconcile(disputed(),[flatRow(),positioned(6,254),positioned(7,0,[],{cash:50250})]);assert.equal(reset.sessions.length,0);
  const future=positioned(10,254);assert.equal(reconcile(disputed(),[flatRow(),future]).sessions.length,0);
@@ -160,4 +160,12 @@ test('a roster gap on an ineligible account reading revokes the next native poin
  const events=realizedEvents(account,baseline),rows=[row(2,159),row(4,0,50159,{net:null,netAt:null,rosterGapBefore:1}),row(5,200,50200)];
  const result=reportedAccountSessions(rows,new Map([[account,events]]),Date.parse(time(6)));
  assert.equal(result.sessions.length,0);assert.equal(result.readings.has(account+'@'+time(2)),true);assert.equal(result.readings.has(account+'@'+time(5)),false);
+});
+
+test('entry-flag-only disputes conserve fills but need independent positions before establishing a native basis',()=>{
+ const fills=[...baseline,{...fill(3,'Sell',2,200,0,3),pos:null,entryFlag:false},{...fill(4,'Buy',1,190,0,4),pos:null},{...fill(5,'Buy',1,180,0,5),pos:null}],events=realizedEvents(account,fills),before=JSON.stringify(fills);
+ assert.equal(events.some(e=>e.positionConflict),false);assert.equal(events[2].entryFlagConflict,true);assert.equal(aggregateRealized(events,'session')[0].net,217);
+ const uncorroborated=reportedAccountSessions([row(6,217)],new Map([[account,events]]),Date.parse(time(9)),new Map([[account,fills]]));assert.equal(uncorroborated.sessions.length,0);
+ const anchored=reportedAccountSessions([flatRow(),positioned(6,217)],new Map([[account,events]]),Date.parse(time(9)),new Map([[account,fills]]));assert.equal(anchored.sessions[0].net,217);assert.equal(anchored.projections.size,1);assert.equal(JSON.stringify(fills),before);
+ const badEnding=reportedAccountSessions([flatRow(),positioned(6,217,[{instrument:'MNQ 12-26',side:'Long',quantity:1}])],new Map([[account,events]]),Date.parse(time(9)),new Map([[account,fills]]));assert.equal(badEnding.sessions.length,0);
 });

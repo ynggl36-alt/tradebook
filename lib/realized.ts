@@ -4,7 +4,7 @@ import {LUCID_PER_SIDE,LUCID_RATES_AS_OF} from './trading-costs';
 import {executionLedger} from './execution-ledger';
 
 export type RealizedDay={account:string;contract:string;symbol:string;day:string;gross:number;commissions:number|null;net:number|null;exits:number;quantity:number;unmatched:number;coverageIssues?:number};
-export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number;positionConflict?:true;coverageGapAt?:string};
+export type RealizedEvent=Omit<RealizedDay,'day'|'coverageIssues'>&{time:string;fillId:string;ordinal:number;coverageIssues:number;positionConflict?:true;entryFlagConflict?:true;coverageGapAt?:string};
 export type RealizedCheckpoint={account:string;capturedAt:string;session:string;net:number|null;afterNet:number|null;coverageIssues?:number;afterCoverageIssues?:number};
 
 // Both Chicago midnight and the 17:00 session boundary occur on UTC hours,
@@ -23,9 +23,9 @@ export function realizedGapBetween(events:readonly RealizedEvent[],from:number,t
 // These events are derived; raw fills and completed Trade identities stay intact.
 export function realizedEvents(account:string,fills:Fill[],ledger=executionLedger(fills)):RealizedEvent[]{
  const conflicts=new Set(ledger.positionConflicts.map(conflict=>conflict.fillId));
- return ledger.events.map(({fill,gross,quantity,unmatched,coverageIssues,coverageGapAt})=>{
+ return ledger.events.map(({fill,gross,quantity,unmatched,coverageIssues,coverageGapAt,entryFlagConflict})=>{
   const day=fillDates(fill.time).calendar,rate=/^(LFE|LFF)/i.test(account)&&day>=LUCID_RATES_AS_OF?LUCID_PER_SIDE[fill.symbol]:undefined,commissions=rate===undefined?null:round(rate*fill.qty);
-  return {account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross,commissions,net:commissions===null||unmatched||coverageIssues?null:round(gross-commissions),exits:quantity?1:0,quantity,unmatched,coverageIssues,...(coverageGapAt?{coverageGapAt}:{}),...(conflicts.has(fill.id)?{positionConflict:true as const}:{})};
+  return {account,contract:fill.contract,symbol:fill.symbol,time:fill.time,fillId:fill.id,ordinal:fill.ordinal,gross,commissions,net:commissions===null||unmatched||coverageIssues?null:round(gross-commissions),exits:quantity?1:0,quantity,unmatched,coverageIssues,...(coverageGapAt?{coverageGapAt}:{}),...(entryFlagConflict?{entryFlagConflict}:{}),...(conflicts.has(fill.id)?{positionConflict:true as const}:{})};
  });
 }
 
