@@ -77,7 +77,7 @@ export function reportedAccountSessions(rows:readonly NativePnlRow[],eventsByAcc
   let gapIndex=0,index=0,total=0,fees=0,complete=true,disputed=false,verified=false,previous:NativePnlReading|undefined;
   for(const point of points){
    while(gapIndex<rosterGaps.length&&rosterGaps[gapIndex]<=Date.parse(point.at)){verified=false;gapIndex++;}
-   while(index<events.length&&Date.parse(events[index].time)<=Date.parse(point.at)){const event=events[index++];complete=complete&&realizedComplete(event,Date.parse(point.at));disputed=disputed||!!event.positionConflict;total+=event.net??0;fees+=event.commissions??0;}
+   while(index<events.length&&Date.parse(events[index].time)<=Date.parse(point.at)){const event=events[index++];complete=complete&&realizedComplete(event,Date.parse(point.at));disputed=disputed||!!(event.positionConflict||event.entryFlagConflict);total+=event.net??0;fees+=event.commissions??0;}
    if(previous&&point.net===0&&previous.net!==0)verified=false;
    if(complete&&!disputed&&fees>0&&Math.abs(round(total)-point.net)<.01)verified=true;
    if(!verified||projections.has(series(point))){

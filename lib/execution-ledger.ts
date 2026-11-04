@@ -2,7 +2,7 @@ import type {Fill,HistoryIssue,Trade} from './types';
 import {addDays,round} from './analytics';
 import {flexSession,flexSessionStart} from './trading-session';
 
-export type ExecutionEvent={fill:Fill;gross:number;quantity:number;unmatched:number;coverageIssues:number;coverageGapAt?:string};
+export type ExecutionEvent={fill:Fill;gross:number;quantity:number;unmatched:number;coverageIssues:number;coverageGapAt?:string;entryFlagConflict?:true};
 type Episode=Omit<Trade,'id'|'account'>&{firstFillId:string;firstOffset:number};
 export type ExecutionLedger={events:ExecutionEvent[];episodes:Episode[];issues:HistoryIssue[];positionConflicts:{fillId:string;contract:string;time:string;reported:number;calculated:number}[];nextUpdateAt?:number};
 
@@ -37,7 +37,9 @@ export function executionLedger(fills:readonly Fill[],options:{intraday?:boolean
     if(before!==0){position=before;lots=[{quantity:Math.abs(before),price:null}];event.coverageIssues=1;}
    }
    if(!episode&&position!==0)episode=start(fill,position,false,0);
-   if(position===0&&fill.entryFlag===false){
+   // Infer a missing opening basis from an exit label only at the first
+   // source fill. Later labels are diagnostic and cannot discard buys/sells.
+   if(index===0&&position===0&&fill.entryFlag===false){
     event.quantity=fill.qty;event.unmatched=fill.qty;event.coverageIssues=1;
     ledger.issues.push({contract,time:fill.time,remaining:0,reason:'Exit without an entry in the available history'});
    }else{
@@ -46,7 +48,10 @@ export function executionLedger(fills:readonly Fill[],options:{intraday?:boolean
      const opening=position===0||position*sign>0;
      if(!episode)episode=start(fill,sign,true,offset);
      const quantity=opening?remaining:Math.min(remaining,Math.abs(position));
-     if(opening){lots.push({quantity,price:fill.price});episode.entryQty+=quantity;episode.entryValue+=quantity*fill.price;}
+     if(opening){
+      if(fill.entryFlag===false)event.entryFlagConflict=true;
+      lots.push({quantity,price:fill.price});episode.entryQty+=quantity;episode.entryValue+=quantity*fill.price;
+     }
      else{
       let closing=quantity;
       while(closing>0){

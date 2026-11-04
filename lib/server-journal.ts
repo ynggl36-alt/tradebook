@@ -201,7 +201,7 @@ export async function loadJournal():Promise<Journal>{
       const times=fills.map(fill=>fill.time).sort((a,b)=>Date.parse(a)-Date.parse(b)),summary:AccountSummary={account:record.account,fills:fills.length,issues:projection.issues,first:times[0]||'',last:times.at(-1)||''};
       const future=history.fills.map(fill=>Date.parse(fill.time)).filter(time=>time>asOf);
       if(ledger.nextUpdateAt!==undefined)future.push(ledger.nextUpdateAt);
-      realizedCache.set(record.account,{revision:record.revision,asOf,rows,events,trades:projection.trades.map(({parts:_,...trade})=>trade),summary,sessions:aggregateRealized(events,'session'),...(events.some(event=>event.unmatched||event.coverageIssues||event.coverageGapAt||event.positionConflict)?{fills}:{}),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
+      realizedCache.set(record.account,{revision:record.revision,asOf,rows,events,trades:projection.trades.map(({parts:_,...trade})=>trade),summary,sessions:aggregateRealized(events,'session'),...(events.some(event=>event.unmatched||event.coverageIssues||event.coverageGapAt||event.positionConflict||event.entryFlagConflict)?{fills}:{}),...(future.length?{nextFutureAt:Math.min(...future)}:{})});
     }
   }
   const realized=hs.results.flatMap(h=>realizedCache.get(h.account)?.rows||[]);

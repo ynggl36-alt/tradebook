@@ -45,11 +45,22 @@ test('a missing opening basis is retained as unknown and later clean episodes re
  assert.equal(summarizeRealized(aggregateRealized(events)).net,null);
 });
 
-test('an explicit exit after flat cannot become a synthetic short or consume the next real entry',async()=>{
+test('later exit labels cannot discard economic quantities, and an unbalanced final flat claim stays incomplete',async()=>{
  const fills=[fill('a','Buy',1,100,1,0),fill('b','Sell',1,110,0,1),{...fill('missing','Sell',1,120,0,2),entryFlag:false},fill('c','Buy',1,130,1,3),fill('d','Sell',1,140,0,4)];
  const history=await reconstruct(account,fills),events=realizedEvents(account,fills);
- assert.deepEqual(history.trades.map(t=>[t.dir,t.pnl]),[['Long',20],['Long',20]]);
- assert.equal(events[2].unmatched,1);assert.equal(events[2].net,null);assert.equal(history.issues.length,1);
+ assert.deepEqual(history.trades.map(t=>[t.dir,t.pnl]),[['Long',20],['Short',-20]]);
+ assert.equal(events[2].unmatched,0);assert.equal(events[2].entryFlagConflict,true);assert.equal(events.at(-1)!.coverageIssues,1);assert.equal(history.issues.length,1);
+ assert.equal(summarizeRealized(aggregateRealized(events)).net,null);
+});
+
+test('balanced entries with contradictory exit labels conserve every real contract and agree with signed cash flow',async()=>{
+ const fills=[fill('a','Buy',2,100,2,0),fill('b','Sell',2,110,0,1),{...fill('c','Sell',3,120,4,2),entryFlag:false},{...fill('d','Buy',1,115,null,3),entryFlag:false},{...fill('e','Buy',2,105,0,4),entryFlag:false}],original=JSON.stringify(fills);
+ const ledger=journalExecutionLedger(fills,Date.parse('2026-10-21T00:00:00Z')),history=await reconstruct(account,fills,ledger),events=realizedEvents(account,fills,ledger),gross=round(fills.reduce((sum,f)=>sum+(f.side==='Sell'?1:-1)*f.qty*f.price*f.pv,0));
+ assert.equal(ledger.issues.length,0);assert.equal(history.trades.length,2);assert.equal(history.trades.reduce((sum,t)=>sum+t.pnl,0),gross);assert.equal(summarizeRealized(aggregateRealized(events)).gross,gross);
+ assert.equal(events.filter(e=>e.entryFlagConflict).length,1);assert.equal(events.filter(e=>e.unmatched||e.coverageIssues||e.coverageGapAt).length,0);
+ const allocated=new Map<string,number>();for(const trade of history.trades)for(const [id,qty]of trade.parts!)allocated.set(id,(allocated.get(id)||0)+qty);
+ for(const f of fills)assert.equal(allocated.get(f.id),f.qty);assert.equal(JSON.stringify(fills),original);
+ const firstExit={...fill('first','Sell',1,100,null,0),entryFlag:false},unknown=realizedEvents(account,[firstExit]);assert.equal(unknown[0].unmatched,1);assert.equal(unknown[0].net,null);
 });
 
 test('intraday journal isolates a missing close while continuous overnight use remains explicit',async()=>{
