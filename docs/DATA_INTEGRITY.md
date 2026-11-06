@@ -10,6 +10,10 @@ An incomplete old session cannot supply entry lots to a later session. Missing o
 
 Native replay is bounded to the same session and requires corroborating opening/ending inventory and fee-inclusive results under the existing verification rules. A preserved capture roster omission interrupts idle-counter fallback even if late uploads did not create a per-account not-seen row. Historical prefixes and financial source observations are not rewritten.
 
+## Calendar date basis
+
+Calendar labels futures trading sessions by their ending date. The same 17:00 Chicago boundary selects the cell totals, completed positions, account activity, balance reads and native comparison. Actual fill timestamps remain unchanged. A session can start in the preceding month or year; Calendar scopes trades and activity by session labels. Other reports retain their existing date basis. Calendar requests balance endpoints with `basis: "session"`; old requests retain Central midnight. The default Calendar selection follows newly arrived sessions, while a chosen date stays selected until Latest is pressed.
+
 ## Identity, partial fills and backfills
 
 Execution identity is account-scoped. Conflicting economic records do not overwrite stored prices, sides, quantities or contract identifiers. Repeated identical fills are idempotent. Timestamp precision compatibility requires the same whole UTC second; it cannot silently cross a second or session boundary.
