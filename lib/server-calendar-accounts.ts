@@ -3,7 +3,7 @@ import {dayBalanceReport,validateDayBalanceRequest} from './calendar-accounts';
 import type {DayBalanceRead} from './calendar-accounts';
 
 export async function loadAccountDayBalances(input:Record<string,unknown>,asOf=Date.now()){
- const {day,start,end,accounts}=validateDayBalanceRequest(input),at=new Date(asOf).toISOString();
+ const {day,basis,start,end,accounts}=validateDayBalanceRequest(input),at=new Date(asOf).toISOString();
  if(!env.DB)throw new Error('Account balance history is unavailable.');
  const points:(DayBalanceRead&{account:string})[]=[];
  // At most 13 read-only queries, each below D1's parameter limit and using the
@@ -26,5 +26,5 @@ export async function loadAccountDayBalances(input:Record<string,unknown>,asOf=D
    .bind(...chunk,start,end,at,start,end,at).all<DayBalanceRead&{account:string}>();
   points.push(...result.results);
  }
- return dayBalanceReport(day,accounts,points,at);
+ return dayBalanceReport(day,accounts,points,at,basis);
 }
